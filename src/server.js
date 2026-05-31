@@ -184,6 +184,22 @@ async function route(req, res) {
     return;
   }
 
+  if (method === "GET" && routePath === "/api/calendar") {
+    const user = await resolveCurrentUser(req);
+    const month = validateMonth(url.searchParams.get("month") || monthKey(new Date(), config.checkinTimezone));
+    const entries = getUserEntriesForMonth(user.id, month);
+
+    sendJson(res, 200, {
+      ok: true,
+      user: publicUser(user),
+      month,
+      entries: entries.map(publicEntry),
+      totalAmount: entries.reduce((sum, entry) => sum + Number(entry.amount || 0), 0),
+      unit: config.checkinUnit
+    });
+    return;
+  }
+
   if (method === "POST" && routePath === "/api/checkin") {
     const user = await resolveCurrentUser(req);
     const result = await checkIn(user);
@@ -635,6 +651,29 @@ function findEntry(userId, date) {
   return row || null;
 }
 
+function getUserEntriesForMonth(userId, month) {
+  return db
+    .prepare(
+      `SELECT
+        id,
+        user_id AS userId,
+        user_name AS userName,
+        date,
+        amount,
+        unit,
+        reward_rule_id AS rewardRuleId,
+        reward_label AS rewardLabel,
+        reward_weight AS rewardWeight,
+        note,
+        created_at AS createdAt,
+        upstream_status AS upstreamStatus
+       FROM checkins
+       WHERE user_id = ? AND date >= ? AND date < ?
+       ORDER BY date ASC`
+    )
+    .all(String(userId), `${month}-01`, nextMonthKey(month));
+}
+
 function insertCheckin(entry) {
   db.prepare(
     `INSERT INTO checkins (
@@ -720,6 +759,30 @@ function validateNotePrefix(value) {
   }
 
   return notePrefix;
+}
+
+function validateMonth(value) {
+  const month = String(value || "").trim();
+
+  if (!/^\d{4}-\d{2}$/.test(month)) {
+    throw httpError(400, "invalid_month", "月份格式必须是 YYYY-MM。");
+  }
+
+  const monthNumber = Number(month.slice(5, 7));
+
+  if (monthNumber < 1 || monthNumber > 12) {
+    throw httpError(400, "invalid_month", "月份必须在 01 到 12 之间。");
+  }
+
+  return month;
+}
+
+function nextMonthKey(month) {
+  const year = Number(month.slice(0, 4));
+  const monthNumber = Number(month.slice(5, 7));
+  const next = monthNumber === 12 ? { year: year + 1, month: 1 } : { year, month: monthNumber + 1 };
+
+  return `${next.year}-${String(next.month).padStart(2, "0")}`;
 }
 
 function publicEntry(entry) {
@@ -1096,29 +1159,58 @@ function renderIndex() {
   </head>
   <body>
     <main class="shell">
-      <section class="hero-card" aria-live="polite">
-        <div class="orb orb-a"></div>
-        <div class="orb orb-b"></div>
-        <p class="eyebrow">Sub2API Check-in</p>
-        <h1>每日签到</h1>
-        <p class="summary" id="summary">正在读取当前登录用户...</p>
+      <section class="page-head">
+        <div>
+          <p class="eyebrow">Daily Check-in</p>
+          <h1>每日签到</h1>
+          <p class="summary" id="summary">正在读取当前登录用户...</p>
+        </div>
+        <button class="checkin-button" id="checkinButton" type="button" disabled>立即签到</button>
+      </section>
 
-        <div class="identity" id="identity" hidden>
-          <span class="identity-label">当前账号</span>
+      <section class="stats-grid" aria-live="polite">
+        <article class="stat-card" id="identity" hidden>
+          <span>当前账号</span>
           <strong id="userName">-</strong>
-        </div>
-
-        <div class="reward">
-          <span class="reward-label">今日奖励</span>
+        </article>
+        <article class="stat-card">
+          <span>今日奖励</span>
           <strong id="rewardAmount">-</strong>
-        </div>
+        </article>
+        <article class="stat-card">
+          <span>本月累计</span>
+          <strong id="monthTotal">-</strong>
+        </article>
+      </section>
 
-        <button class="checkin-button" id="checkinButton" type="button" disabled>
-          立即签到
-        </button>
+      <section class="content-grid">
+        <article class="panel calendar-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Calendar</p>
+              <h2 id="calendarTitle">签到日历</h2>
+            </div>
+            <div class="month-actions">
+              <button class="ghost-button" id="prevMonthButton" type="button">上月</button>
+              <button class="ghost-button" id="currentMonthButton" type="button">本月</button>
+              <button class="ghost-button" id="nextMonthButton" type="button">下月</button>
+            </div>
+          </div>
+          <div class="week-row" aria-hidden="true">
+            <span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span>
+          </div>
+          <div class="calendar-grid" id="calendarGrid"></div>
+        </article>
 
-        <p class="message" id="message"></p>
-        <p class="hint" id="hint"></p>
+        <aside class="panel side-panel">
+          <div>
+            <p class="eyebrow">Status</p>
+            <h2>签到状态</h2>
+          </div>
+          <p class="message" id="message"></p>
+          <p class="hint" id="hint"></p>
+          <div class="history-list" id="historyList"></div>
+        </aside>
       </section>
     </main>
   </body>
@@ -1293,4 +1385,8 @@ function dateKey(date, timezone) {
   const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
 
   return `${values.year}-${values.month}-${values.day}`;
+}
+
+function monthKey(date, timezone) {
+  return dateKey(date, timezone).slice(0, 7);
 }
