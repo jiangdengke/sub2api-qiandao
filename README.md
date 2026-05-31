@@ -24,6 +24,7 @@ SUB2API_BASE_URL=http://127.0.0.1:3000
 SUB2API_ADMIN_API_KEY=your-admin-api-key
 CHECKIN_AMOUNT=0.1
 CHECKIN_UNIT=USD
+CHECKIN_ADMIN_PASSWORD=change-this-password
 ```
 
 本地运行：
@@ -62,6 +63,18 @@ curl http://127.0.0.1:8787/checkin/healthz
 docker logs -f sub2api-qiandao
 ```
 
+管理端：
+
+```text
+http://127.0.0.1:8787/checkin/admin/
+```
+
+反代到 Sub2API 同源后：
+
+```text
+https://你的-sub2api-域名/checkin/admin/
+```
+
 ## 镜像发布
 
 推送到 `master` 分支或推送 `v*` tag 时，GitHub Actions 会构建并发布多架构镜像到 GitHub Container Registry：
@@ -97,6 +110,32 @@ Sub2API 连接探测成功示例：
 ```
 
 重复签到会输出 `checkin.duplicate`，余额接口失败会输出 `sub2api.balance.failed`。
+
+## 奖励规则
+
+默认情况下，签到奖励使用 `CHECKIN_AMOUNT` 的固定金额。你也可以配置多个随机档位，每个档位有自己的权重，用户签到时按权重随机抽取。
+
+推荐通过管理端配置：
+
+```text
+/checkin/admin/
+```
+
+管理端使用 `CHECKIN_ADMIN_PASSWORD` 登录，只能配置签到奖励规则，不会暴露 Sub2API Admin API Key。
+
+也可以通过环境变量设置初始档位：
+
+```dotenv
+CHECKIN_REWARD_RULES=0.05:80:Small,0.1:15:Normal,1:5:Lucky
+```
+
+上面的含义是：
+
+- `0.05` 权重 `80`
+- `0.1` 权重 `15`
+- `1` 权重 `5`
+
+概率按权重占比计算，所以分别是 `80%`、`15%`、`5%`。管理端保存后，规则会写入 `DATA_FILE`，后续重启仍然生效。
 
 ## Sub2API 中配置菜单
 
@@ -136,9 +175,9 @@ URL：https://你的-sub2api-域名/checkin/
 
 ```json
 {
-  "balance": 0.1,
+  "balance": 0.05,
   "operation": "add",
-  "notes": "Daily check-in 2026-05-31"
+  "notes": "Daily check-in 2026-05-31 0.05 USD"
 }
 ```
 

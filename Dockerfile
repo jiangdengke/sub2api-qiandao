@@ -5,6 +5,7 @@ WORKDIR /app
 COPY package.json ./
 COPY src ./src
 COPY public ./public
+COPY README.md ./
 
 RUN mkdir -p /app/data
 

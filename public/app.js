@@ -24,7 +24,7 @@ async function boot() {
   try {
     state.config = await apiFetch("/api/config", { skipAuth: true });
     state.token = findUserToken(state.config.tokenStorageKeys || []);
-    elements.rewardAmount.textContent = `${state.config.amount} ${state.config.unit}`;
+    elements.rewardAmount.textContent = formatRewardSummary(state.config.rewardSummary, state.config.unit);
     await refreshMe();
   } catch (error) {
     showError(error);
@@ -45,7 +45,7 @@ async function refreshMe() {
     elements.checkinButton.disabled = true;
     setMessage(formatEntry(data.entry), "success");
   } else {
-    elements.summary.textContent = `今天签到可获得 ${state.config.amount} ${state.config.unit}`;
+    elements.summary.textContent = rewardSummaryText(state.config.rewardSummary, state.config.unit);
     elements.checkinButton.textContent = "立即签到";
     elements.checkinButton.disabled = false;
     setMessage("每天只能领取一次，按服务端时区计算。", "neutral");
@@ -217,7 +217,32 @@ function formatEntry(entry) {
     return "";
   }
 
-  return `已领取 ${entry.amount} ${entry.unit}，发放时间 ${formatTime(entry.createdAt)}。`;
+  const label = entry.rewardLabel ? `（${entry.rewardLabel}）` : "";
+  return `已领取 ${entry.amount} ${entry.unit}${label}，发放时间 ${formatTime(entry.createdAt)}。`;
+}
+
+function formatRewardSummary(summary, unit) {
+  if (!summary) {
+    return `- ${unit}`;
+  }
+
+  if (summary.mode === "weighted_random" && summary.min !== summary.max) {
+    return `${summary.min} - ${summary.max} ${unit}`;
+  }
+
+  return `${summary.min} ${unit}`;
+}
+
+function rewardSummaryText(summary, unit) {
+  if (!summary || summary.mode !== "weighted_random") {
+    return `今天签到可获得 ${formatRewardSummary(summary, unit)}`;
+  }
+
+  const odds = summary.rules
+    .map((rule) => `${rule.amount}${unit} ${Math.round(rule.probability * 1000) / 10}%`)
+    .join(" / ");
+
+  return `今天签到随机获得 ${formatRewardSummary(summary, unit)}，概率：${odds}`;
 }
 
 function formatTime(value) {
