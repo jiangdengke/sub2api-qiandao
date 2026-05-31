@@ -1,0 +1,11 @@
+services:
+  sub2api-qiandao:
+    build: .
+    container_name: sub2api-qiandao
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "8787:8787"
+    volumes:
+      - ./data:/app/data
