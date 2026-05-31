@@ -187,6 +187,10 @@ async function route(req, res) {
     const date = dateKey(new Date(), config.checkinTimezone);
     const entry = findEntry(user.id, date);
 
+    if (entry) {
+      refreshEntryIdentity(entry, user);
+    }
+
     sendJson(res, 200, {
       ok: true,
       user: publicUser(user),
@@ -244,6 +248,8 @@ async function checkIn(user) {
     const existing = findEntry(user.id, date);
 
     if (existing) {
+      refreshEntryIdentity(existing, user);
+
       logInfo("checkin.duplicate", {
         user: logUser(user),
         date,
@@ -266,10 +272,12 @@ async function checkIn(user) {
     const notePrefix = getNotePrefix();
     const note = `${notePrefix} ${date} ${reward.amount} ${config.checkinUnit}`;
     const upstream = await addUserBalance(user.id, reward.amount, note);
+    const identity = userIdentityForStorage(user);
     const entry = {
       id: `${date}:${user.id}`,
       userId: String(user.id),
-      userName: user.name || "",
+      userName: identity.userName,
+      userEmail: identity.userEmail,
       date,
       amount: reward.amount,
       unit: config.checkinUnit,
@@ -308,6 +316,7 @@ async function checkIn(user) {
 
 async function resolveCurrentUser(req) {
   const headers = buildUserAuthHeaders(req);
+  const tokenUser = extractUserFromJwt(req);
 
   if (!headers.Authorization && !headers.Cookie) {
     throw httpError(401, "missing_user_token", "无法读取当前登录用户，请确认签到页与 Sub2API 同源部署。");
@@ -325,7 +334,7 @@ async function resolveCurrentUser(req) {
     throw httpError(401, "invalid_user_token", "当前登录态验证失败，请重新登录 Sub2API 后再试。");
   }
 
-  const user = extractUser(upstream.body);
+  const user = mergeUserIdentity(extractUser(upstream.body), tokenUser);
 
   if (!user?.id) {
     logError("sub2api.user.unrecognized", {
@@ -495,6 +504,7 @@ async function initStorage() {
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
       user_name TEXT NOT NULL DEFAULT '',
+      user_email TEXT NOT NULL DEFAULT '',
       date TEXT NOT NULL,
       amount REAL NOT NULL,
       unit TEXT NOT NULL,
@@ -510,6 +520,7 @@ async function initStorage() {
     CREATE INDEX IF NOT EXISTS idx_checkins_created_at ON checkins (created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_checkins_user_date ON checkins (user_id, date);
   `);
+  ensureColumn("checkins", "user_email", "TEXT NOT NULL DEFAULT ''");
 
   await migrateLegacyJsonIfNeeded();
   seedRewardRulesIfNeeded();
@@ -549,6 +560,7 @@ async function migrateLegacyJsonIfNeeded() {
         id: entry.id || `${entry.date}:${entry.userId}`,
         userId: entry.userId,
         userName: entry.userName || "",
+        userEmail: entry.userEmail || "",
         date: entry.date,
         amount: Number(entry.amount),
         unit: entry.unit || config.checkinUnit,
@@ -609,6 +621,16 @@ function seedSettingsIfNeeded() {
 
 function countRows(tableName) {
   return db.prepare(`SELECT COUNT(*) AS count FROM ${tableName}`).get().count;
+}
+
+function ensureColumn(tableName, columnName, definition) {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all();
+
+  if (columns.some((column) => column.name === columnName)) {
+    return;
+  }
+
+  db.prepare(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`).run();
 }
 
 function getRewardRules() {
@@ -726,6 +748,7 @@ function findEntry(userId, date) {
         id,
         user_id AS userId,
         user_name AS userName,
+        user_email AS userEmail,
         date,
         amount,
         unit,
@@ -751,6 +774,7 @@ function getUserEntriesForMonth(userId, month) {
         id,
         user_id AS userId,
         user_name AS userName,
+        user_email AS userEmail,
         date,
         amount,
         unit,
@@ -773,6 +797,7 @@ function insertCheckin(entry) {
       id,
       user_id,
       user_name,
+      user_email,
       date,
       amount,
       unit,
@@ -782,11 +807,12 @@ function insertCheckin(entry) {
       note,
       created_at,
       upstream_status
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     entry.id,
     String(entry.userId),
     entry.userName || "",
+    entry.userEmail || "",
     entry.date,
     entry.amount,
     entry.unit,
@@ -799,6 +825,28 @@ function insertCheckin(entry) {
   );
 }
 
+function refreshEntryIdentity(entry, user) {
+  const identity = userIdentityForStorage(user);
+
+  if (!identity.userName && !identity.userEmail) {
+    return;
+  }
+
+  updateCheckinIdentity(entry.id, identity);
+  entry.userName = entry.userName || identity.userName;
+  entry.userEmail = entry.userEmail || identity.userEmail;
+}
+
+function updateCheckinIdentity(id, identity) {
+  db.prepare(
+    `UPDATE checkins
+     SET
+       user_name = CASE WHEN user_name = '' THEN ? ELSE user_name END,
+       user_email = CASE WHEN user_email = '' THEN ? ELSE user_email END
+     WHERE id = ?`
+  ).run(identity.userName || "", identity.userEmail || "", id);
+}
+
 function getRecentEntries(limit) {
   return db
     .prepare(
@@ -806,6 +854,7 @@ function getRecentEntries(limit) {
         id,
         user_id AS userId,
         user_name AS userName,
+        user_email AS userEmail,
         date,
         amount,
         unit,
@@ -893,6 +942,8 @@ function publicAdminEntry(entry) {
   return {
     userId: entry.userId,
     userName: entry.userName || "",
+    userEmail: entry.userEmail || "",
+    userDisplayName: displayUserName(entry) || `用户 ${entry.userId}`,
     date: entry.date,
     amount: entry.amount,
     unit: entry.unit,
@@ -902,10 +953,40 @@ function publicAdminEntry(entry) {
   };
 }
 
+function userIdentityForStorage(user) {
+  return {
+    userName: displayUserName(user),
+    userEmail: firstNonEmpty(user.email, user.userEmail)
+  };
+}
+
+function displayUserName(value) {
+  return firstNonEmpty(
+    value?.userName,
+    value?.name,
+    value?.username,
+    value?.displayName,
+    value?.email,
+    value?.userEmail
+  );
+}
+
+function firstNonEmpty(...values) {
+  for (const value of values) {
+    const text = String(value ?? "").trim();
+
+    if (text) {
+      return text;
+    }
+  }
+
+  return "";
+}
+
 function publicUser(user) {
   return {
     id: String(user.id),
-    name: user.name || "",
+    name: displayUserName(user),
     email: user.email || "",
     balance: user.balance ?? null
   };
@@ -1319,7 +1400,7 @@ function extractUser(payload) {
       continue;
     }
 
-    const id = candidate.id ?? candidate.user_id ?? candidate.userId ?? candidate.uuid;
+    const id = candidate.id ?? candidate.user_id ?? candidate.userId ?? candidate.uuid ?? candidate.sub;
 
     if (id === undefined || id === null || id === "") {
       continue;
@@ -1327,13 +1408,86 @@ function extractUser(payload) {
 
     return {
       id,
-      name: candidate.username ?? candidate.name ?? candidate.displayName ?? candidate.email ?? "",
+      name:
+        candidate.username ??
+        candidate.name ??
+        candidate.displayName ??
+        candidate.display_name ??
+        candidate.nickname ??
+        candidate.email ??
+        "",
       email: candidate.email ?? "",
       balance: candidate.balance ?? candidate.quota ?? candidate.credit ?? null
     };
   }
 
   return null;
+}
+
+function extractUserFromJwt(req) {
+  const token = getUserTokenFromRequest(req);
+
+  if (!token) {
+    return null;
+  }
+
+  const parts = token.split(".");
+
+  if (parts.length < 2) {
+    return null;
+  }
+
+  try {
+    const payload = JSON.parse(Buffer.from(base64UrlToBase64(parts[1]), "base64").toString("utf8"));
+    return extractUser(payload);
+  } catch {
+    return null;
+  }
+}
+
+function getUserTokenFromRequest(req) {
+  const authorization = String(req.headers.authorization || "");
+  const explicitToken = req.headers["x-sub2api-token"] || req.headers["x-user-token"];
+
+  if (authorization.toLowerCase().startsWith("bearer ")) {
+    return authorization.slice(7).trim();
+  }
+
+  if (authorization) {
+    return authorization.trim();
+  }
+
+  if (explicitToken) {
+    return String(explicitToken).replace(/^bearer\s+/i, "").trim();
+  }
+
+  const cookies = parseCookieHeader(req.headers.cookie || "");
+  const tokenCookieName = config.userTokenCookieNames.find((name) => cookies[name]);
+
+  return tokenCookieName ? String(cookies[tokenCookieName]).replace(/^bearer\s+/i, "").trim() : "";
+}
+
+function base64UrlToBase64(value) {
+  const base64 = value.replaceAll("-", "+").replaceAll("_", "/");
+  return base64.padEnd(Math.ceil(base64.length / 4) * 4, "=");
+}
+
+function mergeUserIdentity(user, tokenUser) {
+  if (!user) {
+    return tokenUser;
+  }
+
+  if (!tokenUser) {
+    return user;
+  }
+
+  return {
+    ...user,
+    id: user.id ?? tokenUser.id,
+    name: firstNonEmpty(user.name, tokenUser.name),
+    email: firstNonEmpty(user.email, tokenUser.email),
+    balance: user.balance ?? tokenUser.balance ?? null
+  };
 }
 
 function stripPublicBasePath(pathname) {

@@ -315,9 +315,10 @@ function renderHistory(entries) {
   for (const entry of entries) {
     const item = document.createElement("article");
     item.className = "history-item";
+    const userName = entry.userDisplayName || entry.userName || entry.userEmail || `用户 ${entry.userId}`;
     item.innerHTML = `
       <div>
-        <strong>${escapeHtml(entry.userName || `用户 ${entry.userId}`)}</strong>
+        <strong>${escapeHtml(userName)}</strong>
         <span>${escapeHtml(entry.date)} · ${escapeHtml(entry.rewardLabel || "奖励")}</span>
       </div>
       <b>${entry.amount} ${escapeHtml(entry.unit)}</b>
