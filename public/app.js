@@ -338,7 +338,7 @@ function formatRewardSummary(summary, unit) {
     return `- ${unit}`;
   }
 
-  if (summary.mode === "weighted_random" && summary.min !== summary.max) {
+  if (summary.min !== summary.max) {
     return `${formatAmount(summary.min)} - ${formatAmount(summary.max)} ${unit}`;
   }
 
@@ -346,8 +346,12 @@ function formatRewardSummary(summary, unit) {
 }
 
 function rewardSummaryText(summary, unit) {
-  if (!summary || summary.mode !== "weighted_random") {
+  if (!summary || summary.mode === "fixed") {
     return `今天签到可获得 ${formatRewardSummary(summary, unit)}`;
+  }
+
+  if (summary.mode === "range_random") {
+    return `今天签到随机获得 ${formatRewardSummary(summary, unit)}，按 ${formatAmount(summary.step)} ${unit} 为步长等概率抽取。`;
   }
 
   const odds = summary.rules

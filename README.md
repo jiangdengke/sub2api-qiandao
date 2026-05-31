@@ -24,6 +24,11 @@ PUBLIC_BASE_PATH=/checkin
 SUB2API_BASE_URL=http://127.0.0.1:3000
 SUB2API_ADMIN_API_KEY=your-admin-api-key
 CHECKIN_AMOUNT=0.1
+# 可选：仿 New API 的区间随机奖励。未配置时等同固定 CHECKIN_AMOUNT。
+# CHECKIN_REWARD_MODE=range_random
+# CHECKIN_MIN_AMOUNT=0.1
+# CHECKIN_MAX_AMOUNT=2
+# CHECKIN_AMOUNT_STEP=0.1
 CHECKIN_UNIT=USD
 CHECKIN_ADMIN_PASSWORD=change-this-password
 CHECKIN_DB_FILE=./data/checkins.db
@@ -124,7 +129,10 @@ Sub2API 连接探测成功示例：
 
 ## 奖励规则
 
-默认情况下，签到奖励使用 `CHECKIN_AMOUNT` 的固定金额。你也可以在管理端配置多个随机档位，每个档位有自己的金额、权重和名称，用户签到时按权重随机抽取。
+默认情况下，签到奖励使用 `CHECKIN_AMOUNT` 的固定金额。管理端支持两种模式：
+
+- `New API 区间随机`：配置最小金额、最大金额和步长，签到时在区间内等概率抽取一个金额。比如 `0.1` 到 `2`、步长 `0.1`，会从 `0.1、0.2 ... 2` 中随机选一个。
+- `权重档位随机`：配置多个金额档位，每个档位有自己的金额、权重和名称，签到时按权重随机抽取。
 
 推荐通过管理端配置：
 
@@ -132,11 +140,21 @@ Sub2API 连接探测成功示例：
 /checkin/admin/
 ```
 
-管理端使用 `CHECKIN_ADMIN_PASSWORD` 登录，只能配置签到奖励规则，不会暴露 Sub2API Admin API Key。
+管理端使用 `CHECKIN_ADMIN_PASSWORD` 登录，可以配置奖励模式、区间随机参数、权重档位和余额备注前缀，不会暴露 Sub2API Admin API Key。
 
-也可以通过环境变量设置首次初始化档位：
+也可以通过环境变量设置首次初始化策略。区间随机示例：
 
 ```dotenv
+CHECKIN_REWARD_MODE=range_random
+CHECKIN_MIN_AMOUNT=0.1
+CHECKIN_MAX_AMOUNT=2
+CHECKIN_AMOUNT_STEP=0.1
+```
+
+如果更想要“大额低概率”的抽奖效果，可以使用权重档位：
+
+```dotenv
+CHECKIN_REWARD_MODE=weighted_random
 CHECKIN_REWARD_RULES=0.05:80:Small,0.1:15:Normal,1:5:Lucky
 ```
 

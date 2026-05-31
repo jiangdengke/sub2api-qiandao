@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { timingSafeEqual } from "node:crypto";
+import { randomInt, timingSafeEqual } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
@@ -22,6 +22,10 @@ const config = {
   balanceOperation: process.env.SUB2API_BALANCE_OPERATION || "add",
   balanceAmountField: process.env.SUB2API_BALANCE_AMOUNT_FIELD || "balance",
   checkinAmount: readFloatEnv("CHECKIN_AMOUNT", 0.1),
+  checkinMinAmount: readFloatEnv("CHECKIN_MIN_AMOUNT", readFloatEnv("CHECKIN_AMOUNT", 0.1)),
+  checkinMaxAmount: readFloatEnv("CHECKIN_MAX_AMOUNT", readFloatEnv("CHECKIN_AMOUNT", 0.1)),
+  checkinAmountStep: readFloatEnv("CHECKIN_AMOUNT_STEP", 0.01),
+  checkinRewardMode: normalizeRewardMode(process.env.CHECKIN_REWARD_MODE || ""),
   defaultRewardRules: parseRewardRulesEnv(process.env.CHECKIN_REWARD_RULES || ""),
   checkinUnit: process.env.CHECKIN_UNIT || "USD",
   checkinTimezone: process.env.CHECKIN_TIMEZONE || "Asia/Shanghai",
@@ -115,8 +119,8 @@ async function route(req, res) {
   }
 
   if (method === "GET" && routePath === "/api/config") {
-    const rewardRules = getRewardRules();
-    const rewardSummary = summarizeRewardRules(rewardRules);
+    const rewardConfig = getRewardConfig();
+    const rewardSummary = rewardConfig.summary;
 
     sendJson(res, 200, {
       ok: true,
@@ -132,15 +136,17 @@ async function route(req, res) {
 
   if (method === "GET" && routePath === "/api/admin/config") {
     requireAdmin(req);
-    const rewardRules = getRewardRules();
+    const rewardConfig = getRewardConfig();
 
     sendJson(res, 200, {
       ok: true,
       unit: config.checkinUnit,
       timezone: config.checkinTimezone,
       notePrefix: getNotePrefix(),
-      rewardRules,
-      rewardSummary: summarizeRewardRules(rewardRules),
+      rewardMode: rewardConfig.mode,
+      rewardRange: rewardConfig.range,
+      rewardRules: rewardConfig.rewardRules,
+      rewardSummary: rewardConfig.summary,
       recentEntries: getRecentEntries(30).map(publicAdminEntry)
     });
     return;
@@ -149,12 +155,17 @@ async function route(req, res) {
   if (method === "PUT" && routePath === "/api/admin/config") {
     requireAdmin(req);
     const body = await readJsonBody(req);
-    const rewardRules = validateRewardRules(body?.rewardRules);
+    const rewardMode = validateRewardMode(body?.rewardMode ?? getRewardMode());
+    const rewardRange = validateRewardRange(body?.rewardRange ?? getRewardRange());
+    const rewardRules = validateRewardRules(body?.rewardRules ?? getRewardRules());
     const notePrefix = validateNotePrefix(body?.notePrefix ?? getNotePrefix());
 
-    saveAdminConfig({ rewardRules, notePrefix });
+    saveAdminConfig({ rewardMode, rewardRange, rewardRules, notePrefix });
+    const rewardSummary = summarizeRewardConfig({ mode: rewardMode, range: rewardRange, rewardRules });
 
     logInfo("admin.config.updated", {
+      rewardMode,
+      rewardRange,
       count: rewardRules.length,
       enabledCount: rewardRules.filter((rule) => rule.enabled).length,
       notePrefix
@@ -163,8 +174,10 @@ async function route(req, res) {
     sendJson(res, 200, {
       ok: true,
       notePrefix,
+      rewardMode,
+      rewardRange,
       rewardRules,
-      rewardSummary: summarizeRewardRules(rewardRules)
+      rewardSummary
     });
     return;
   }
@@ -248,7 +261,8 @@ async function checkIn(user) {
       };
     }
 
-    const reward = pickReward(getRewardRules());
+    const rewardConfig = getRewardConfig();
+    const reward = pickReward(rewardConfig);
     const notePrefix = getNotePrefix();
     const note = `${notePrefix} ${date} ${reward.amount} ${config.checkinUnit}`;
     const upstream = await addUserBalance(user.id, reward.amount, note);
@@ -277,6 +291,7 @@ async function checkIn(user) {
       rewardRuleId: entry.rewardRuleId,
       rewardLabel: entry.rewardLabel,
       rewardWeight: entry.rewardWeight,
+      rewardMode: rewardConfig.mode,
       upstreamStatus: upstream.status,
       createdAt: entry.createdAt
     });
@@ -572,6 +587,24 @@ function seedSettingsIfNeeded() {
   if (!getSetting("checkin_note_prefix")) {
     setSetting("checkin_note_prefix", config.checkinNotePrefix);
   }
+
+  if (!getSetting("reward_mode")) {
+    setSetting("reward_mode", defaultRewardMode());
+  }
+
+  const range = defaultRewardRange();
+
+  if (!getSetting("range_min_amount")) {
+    setSetting("range_min_amount", range.min);
+  }
+
+  if (!getSetting("range_max_amount")) {
+    setSetting("range_max_amount", range.max);
+  }
+
+  if (!getSetting("range_step")) {
+    setSetting("range_step", range.step);
+  }
 }
 
 function countRows(tableName) {
@@ -598,10 +631,70 @@ function getRewardRules() {
   );
 }
 
-function saveAdminConfig({ rewardRules, notePrefix }) {
+function getRewardConfig() {
+  const mode = getRewardMode();
+  const range = getRewardRange();
+  const rewardRules = getRewardRules();
+
+  return {
+    mode,
+    range,
+    rewardRules,
+    summary: summarizeRewardConfig({ mode, range, rewardRules })
+  };
+}
+
+function getRewardMode() {
+  const mode = normalizeRewardMode(getSetting("reward_mode"));
+  return mode || defaultRewardMode();
+}
+
+function defaultRewardMode() {
+  if (config.checkinRewardMode) {
+    return config.checkinRewardMode;
+  }
+
+  const enabledRules = getRewardRules().filter((rule) => rule.enabled && rule.weight > 0);
+  return enabledRules.length > 1 ? "weighted_random" : "range_random";
+}
+
+function getRewardRange() {
+  const fallback = defaultRewardRange();
+
+  return validateRewardRange({
+    min: readNumberSetting("range_min_amount", fallback.min),
+    max: readNumberSetting("range_max_amount", fallback.max),
+    step: readNumberSetting("range_step", fallback.step)
+  });
+}
+
+function defaultRewardRange() {
+  return validateRewardRange({
+    min: config.checkinMinAmount,
+    max: config.checkinMaxAmount,
+    step: config.checkinAmountStep
+  });
+}
+
+function readNumberSetting(key, fallback) {
+  const value = getSetting(key);
+
+  if (!value) {
+    return fallback;
+  }
+
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function saveAdminConfig({ rewardMode, rewardRange, rewardRules, notePrefix }) {
   db.exec("BEGIN");
 
   try {
+    setSetting("reward_mode", rewardMode);
+    setSetting("range_min_amount", rewardRange.min);
+    setSetting("range_max_amount", rewardRange.max);
+    setSetting("range_step", rewardRange.step);
     replaceRewardRules(rewardRules);
     setSetting("checkin_note_prefix", notePrefix);
     setSetting("reward_rules_updated_at", new Date().toISOString());
@@ -849,6 +942,65 @@ function normalizeRewardRules(rules) {
   ];
 }
 
+function validateRewardMode(value) {
+  const mode = normalizeRewardMode(value);
+
+  if (!mode) {
+    throw httpError(400, "invalid_reward_mode", "奖励模式必须是 range_random 或 weighted_random。");
+  }
+
+  return mode;
+}
+
+function normalizeRewardMode(value) {
+  const mode = String(value || "").trim().toLowerCase();
+
+  if (["range", "range_random", "newapi"].includes(mode)) {
+    return "range_random";
+  }
+
+  if (["weighted", "weighted_random", "rules"].includes(mode)) {
+    return "weighted_random";
+  }
+
+  return "";
+}
+
+function validateRewardRange(value) {
+  const min = roundAmount(Number(value?.min ?? value?.minAmount));
+  const max = roundAmount(Number(value?.max ?? value?.maxAmount));
+  const step = roundAmount(Number(value?.step));
+
+  if (!Number.isFinite(min) || min <= 0) {
+    throw httpError(400, "invalid_reward_range", "最小奖励金额必须大于 0。");
+  }
+
+  if (!Number.isFinite(max) || max <= 0) {
+    throw httpError(400, "invalid_reward_range", "最大奖励金额必须大于 0。");
+  }
+
+  if (max < min) {
+    throw httpError(400, "invalid_reward_range", "最大奖励金额不能小于最小奖励金额。");
+  }
+
+  if (!Number.isFinite(step) || step <= 0) {
+    throw httpError(400, "invalid_reward_range", "随机步长必须大于 0。");
+  }
+
+  const stepsFloat = (max - min) / step;
+  const steps = Math.round(stepsFloat);
+
+  if (Math.abs(stepsFloat - steps) > 1e-8) {
+    throw httpError(400, "invalid_reward_range", "最大金额减最小金额必须能被步长整除。");
+  }
+
+  if (steps > 10000) {
+    throw httpError(400, "invalid_reward_range", "随机区间过大，请调大步长或缩小金额范围。");
+  }
+
+  return { min, max, step };
+}
+
 function validateRewardRules(rules, options = {}) {
   if (!Array.isArray(rules)) {
     if (options.allowEmpty) {
@@ -909,7 +1061,28 @@ function totalEnabledWeight(rules) {
     .reduce((sum, rule) => sum + rule.weight, 0);
 }
 
-function pickReward(rules) {
+function pickReward(rewardConfig) {
+  if (rewardConfig.mode === "range_random") {
+    return pickRangeReward(rewardConfig.range);
+  }
+
+  return pickWeightedReward(rewardConfig.rewardRules);
+}
+
+function pickRangeReward(range) {
+  const steps = Math.round((range.max - range.min) / range.step);
+  const amount = roundAmount(range.min + randomInt(steps + 1) * range.step);
+
+  return {
+    id: "range-random",
+    label: range.min === range.max ? "固定奖励" : "区间随机",
+    amount,
+    weight: 0,
+    enabled: true
+  };
+}
+
+function pickWeightedReward(rules) {
   const enabledRules = rules.filter((rule) => rule.enabled && rule.weight > 0);
   const totalWeight = totalEnabledWeight(enabledRules);
   let cursor = Math.random() * totalWeight;
@@ -925,6 +1098,26 @@ function pickReward(rules) {
   return { ...enabledRules[enabledRules.length - 1] };
 }
 
+function summarizeRewardConfig(rewardConfig) {
+  if (rewardConfig.mode === "range_random") {
+    return summarizeRewardRange(rewardConfig.range);
+  }
+
+  return summarizeRewardRules(rewardConfig.rewardRules);
+}
+
+function summarizeRewardRange(range) {
+  return {
+    mode: range.min === range.max ? "fixed" : "range_random",
+    sourceMode: "range_random",
+    min: range.min,
+    max: range.max,
+    step: range.step,
+    totalWeight: 0,
+    rules: []
+  };
+}
+
 function summarizeRewardRules(rules) {
   const enabledRules = rules.filter((rule) => rule.enabled && rule.weight > 0);
   const amounts = enabledRules.map((rule) => rule.amount);
@@ -932,6 +1125,7 @@ function summarizeRewardRules(rules) {
 
   return {
     mode: enabledRules.length > 1 ? "weighted_random" : "fixed",
+    sourceMode: "weighted_random",
     min: Math.min(...amounts),
     max: Math.max(...amounts),
     totalWeight,
@@ -943,6 +1137,10 @@ function summarizeRewardRules(rules) {
       probability: totalWeight > 0 ? rule.weight / totalWeight : 0
     }))
   };
+}
+
+function roundAmount(value) {
+  return Number(Number(value).toFixed(6));
 }
 
 function parseRewardRulesEnv(value) {
@@ -1232,10 +1430,12 @@ function renderAdmin() {
   </head>
   <body>
     <main class="admin-shell">
-      <section class="panel hero">
-        <p class="eyebrow">Check-in Admin</p>
-        <h1>签到奖励配置</h1>
-        <p class="summary">配置多个金额档位和权重。用户每日签到时按权重随机获得其中一个档位。</p>
+      <section class="page-head hero">
+        <div>
+          <p class="eyebrow">Check-in Admin</p>
+          <h1>签到奖励配置</h1>
+          <p class="summary">支持 New API 风格的区间随机，也可以继续使用多档位权重抽奖。</p>
+        </div>
       </section>
 
       <section class="panel login-panel" id="loginPanel">
@@ -1246,14 +1446,14 @@ function renderAdmin() {
         </div>
         <p class="hint">管理端只使用独立密码，不会暴露 Sub2API Admin API Key。</p>
       </section>
+      <p class="message global-message" id="message"></p>
 
       <section class="panel config-panel" id="configPanel" hidden>
         <div class="panel-head">
           <div>
-            <p class="eyebrow">Reward Rules</p>
-            <h2>奖励档位</h2>
+            <p class="eyebrow">Reward Mode</p>
+            <h2>奖励模式</h2>
           </div>
-          <button id="addRuleButton" type="button">新增档位</button>
         </div>
 
         <div class="meta-grid">
@@ -1271,20 +1471,68 @@ function renderAdmin() {
           </div>
         </div>
 
-        <label class="note-prefix-field" for="notePrefixInput">
-          <span>余额备注前缀</span>
-          <input id="notePrefixInput" type="text" maxlength="120" placeholder="Daily check-in" />
-          <small>签到成功后写入 Sub2API 余额调整备注，例如：Daily check-in 2026-05-31 0.1 USD。</small>
-        </label>
-
         <form id="rulesForm">
-          <div class="rules" id="rules"></div>
+          <div class="mode-switch" role="radiogroup" aria-label="奖励模式">
+            <label class="mode-card">
+              <input class="mode-input" name="rewardMode" type="radio" value="range_random" />
+              <span>New API 区间随机</span>
+              <small>设置最小/最大金额，按步长等概率抽取一个金额。</small>
+            </label>
+            <label class="mode-card">
+              <input class="mode-input" name="rewardMode" type="radio" value="weighted_random" />
+              <span>权重档位随机</span>
+              <small>每个金额档位有独立权重，适合做大额低概率奖励。</small>
+            </label>
+          </div>
+
+          <section class="reward-section" id="rangeSection">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">Range</p>
+                <h2>区间随机</h2>
+              </div>
+              <p class="hint">仿 New API：在最小金额和最大金额之间抽取。因为这里是 USD 小数，增加了步长来避免浮点随机误差。</p>
+            </div>
+            <div class="range-grid">
+              <label>
+                <span>最小金额</span>
+                <input id="rangeMinInput" type="number" min="0" step="0.000001" placeholder="0.1" />
+              </label>
+              <label>
+                <span>最大金额</span>
+                <input id="rangeMaxInput" type="number" min="0" step="0.000001" placeholder="2" />
+              </label>
+              <label>
+                <span>随机步长</span>
+                <input id="rangeStepInput" type="number" min="0" step="0.000001" placeholder="0.1" />
+              </label>
+            </div>
+            <p class="hint range-preview" id="rangePreview"></p>
+          </section>
+
+          <section class="reward-section" id="weightedSection">
+            <div class="section-head with-action">
+              <div>
+                <p class="eyebrow">Weighted Rules</p>
+                <h2>权重档位</h2>
+              </div>
+              <button id="addRuleButton" type="button">新增档位</button>
+            </div>
+            <p class="hint">概率 = 当前档位权重 / 所有启用档位权重总和。</p>
+            <div class="rules" id="rules"></div>
+          </section>
+
+          <label class="note-prefix-field" for="notePrefixInput">
+            <span>余额备注前缀</span>
+            <input id="notePrefixInput" type="text" maxlength="120" placeholder="Daily check-in" />
+            <small>签到成功后写入 Sub2API 余额调整备注，例如：Daily check-in 2026-05-31 0.1 USD。</small>
+          </label>
+
           <div class="actions">
             <button class="secondary" id="reloadButton" type="button">重新加载</button>
             <button class="primary" type="submit">保存配置</button>
           </div>
         </form>
-        <p class="message" id="message"></p>
       </section>
 
       <section class="panel history-panel" id="historyPanel" hidden>
