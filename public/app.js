@@ -184,11 +184,7 @@ function renderCalendar(month, entries) {
 
     item.innerHTML = `
       <span class="day-number">${cell.day}</span>
-      ${
-        cell.entry
-          ? `<strong>${formatAmount(cell.entry.amount)} ${escapeHtml(cell.entry.unit)}</strong><small>${escapeHtml(cell.entry.rewardLabel || "已签到")}</small>`
-          : `<small>未签到</small>`
-      }
+      ${cell.entry ? `<strong>${formatAmount(cell.entry.amount)} ${escapeHtml(cell.entry.unit)}</strong>` : ""}
     `;
     elements.calendarGrid.append(item);
   }

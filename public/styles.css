@@ -178,11 +178,11 @@ h2 {
 .calendar-grid {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 8px;
+  gap: 6px;
 }
 
 .week-row {
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 .week-row span {
@@ -193,10 +193,10 @@ h2 {
 }
 
 .calendar-day {
-  min-height: 96px;
-  padding: 10px;
+  min-height: 68px;
+  padding: 8px;
   border: 1px solid rgba(148, 163, 184, 0.13);
-  border-radius: 14px;
+  border-radius: 12px;
   color: var(--muted);
   background: rgba(8, 17, 31, 0.56);
 }
@@ -218,12 +218,13 @@ h2 {
 
 .day-number {
   display: flex;
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   align-items: center;
   justify-content: center;
   border-radius: 999px;
   color: var(--muted-strong);
+  font-size: 0.84rem;
   font-weight: 900;
 }
 
@@ -234,18 +235,9 @@ h2 {
 
 .calendar-day strong {
   display: block;
-  margin-top: 12px;
+  margin-top: 8px;
   color: var(--brand);
-  font-size: 1rem;
-}
-
-.calendar-day small {
-  display: block;
-  margin-top: 6px;
-  overflow: hidden;
-  color: var(--muted);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: 0.88rem;
 }
 
 .side-panel {
@@ -328,11 +320,12 @@ h2 {
   }
 
   .calendar-day {
-    min-height: 76px;
-    padding: 8px;
+    min-height: 54px;
+    padding: 6px;
   }
 
   .calendar-day strong {
-    font-size: 0.82rem;
+    margin-top: 6px;
+    font-size: 0.74rem;
   }
 }
