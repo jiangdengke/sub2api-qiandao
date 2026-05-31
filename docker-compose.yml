@@ -1,6 +1,6 @@
 services:
   sub2api-qiandao:
-    build: .
+    image: ghcr.io/jiangdengke/sub2api-qiandao:latest
     container_name: sub2api-qiandao
     restart: unless-stopped
     env_file:

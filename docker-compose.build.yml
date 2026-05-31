@@ -1,0 +1,4 @@
+services:
+  sub2api-qiandao:
+    build: .
+    image: sub2api-qiandao:local

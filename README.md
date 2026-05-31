@@ -37,10 +37,19 @@ npm run start:env
 Docker Compose：
 
 ```bash
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
-也可以直接使用 GitHub Packages 发布的镜像：
+默认 `docker-compose.yml` 使用 GitHub Packages 发布的镜像，不需要本机构建，因此不会拉取 `node:24-alpine` 基础镜像。
+
+如果需要本地构建镜像：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
+
+也可以直接使用 Docker 命令运行发布镜像：
 
 ```bash
 docker run -d \
