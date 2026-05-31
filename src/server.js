@@ -138,6 +138,7 @@ async function route(req, res) {
       ok: true,
       unit: config.checkinUnit,
       timezone: config.checkinTimezone,
+      notePrefix: getNotePrefix(),
       rewardRules,
       rewardSummary: summarizeRewardRules(rewardRules),
       recentEntries: getRecentEntries(30).map(publicAdminEntry)
@@ -149,16 +150,19 @@ async function route(req, res) {
     requireAdmin(req);
     const body = await readJsonBody(req);
     const rewardRules = validateRewardRules(body?.rewardRules);
+    const notePrefix = validateNotePrefix(body?.notePrefix ?? getNotePrefix());
 
-    saveRewardRules(rewardRules);
+    saveAdminConfig({ rewardRules, notePrefix });
 
-    logInfo("admin.reward_rules.updated", {
+    logInfo("admin.config.updated", {
       count: rewardRules.length,
-      enabledCount: rewardRules.filter((rule) => rule.enabled).length
+      enabledCount: rewardRules.filter((rule) => rule.enabled).length,
+      notePrefix
     });
 
     sendJson(res, 200, {
       ok: true,
+      notePrefix,
       rewardRules,
       rewardSummary: summarizeRewardRules(rewardRules)
     });
@@ -229,7 +233,8 @@ async function checkIn(user) {
     }
 
     const reward = pickReward(getRewardRules());
-    const note = `${config.checkinNotePrefix} ${date} ${reward.amount} ${config.checkinUnit}`;
+    const notePrefix = getNotePrefix();
+    const note = `${notePrefix} ${date} ${reward.amount} ${config.checkinUnit}`;
     const upstream = await addUserBalance(user.id, reward.amount, note);
     const entry = {
       id: `${date}:${user.id}`,
@@ -477,6 +482,7 @@ async function initStorage() {
 
   await migrateLegacyJsonIfNeeded();
   seedRewardRulesIfNeeded();
+  seedSettingsIfNeeded();
 
   logInfo("storage.sqlite.ready", {
     dbFile: config.dbFile
@@ -546,6 +552,12 @@ function seedRewardRulesIfNeeded() {
   replaceRewardRules(normalizeRewardRules([]));
 }
 
+function seedSettingsIfNeeded() {
+  if (!getSetting("checkin_note_prefix")) {
+    setSetting("checkin_note_prefix", config.checkinNotePrefix);
+  }
+}
+
 function countRows(tableName) {
   return db.prepare(`SELECT COUNT(*) AS count FROM ${tableName}`).get().count;
 }
@@ -570,11 +582,12 @@ function getRewardRules() {
   );
 }
 
-function saveRewardRules(rewardRules) {
+function saveAdminConfig({ rewardRules, notePrefix }) {
   db.exec("BEGIN");
 
   try {
     replaceRewardRules(rewardRules);
+    setSetting("checkin_note_prefix", notePrefix);
     setSetting("reward_rules_updated_at", new Date().toISOString());
     db.exec("COMMIT");
   } catch (error) {
@@ -685,6 +698,28 @@ function setSetting(key, value) {
        value = excluded.value,
        updated_at = excluded.updated_at`
   ).run(key, String(value), new Date().toISOString());
+}
+
+function getSetting(key) {
+  return db.prepare("SELECT value FROM settings WHERE key = ? LIMIT 1").get(key)?.value || "";
+}
+
+function getNotePrefix() {
+  return getSetting("checkin_note_prefix") || config.checkinNotePrefix;
+}
+
+function validateNotePrefix(value) {
+  const notePrefix = String(value ?? "").trim();
+
+  if (!notePrefix) {
+    throw httpError(400, "invalid_note_prefix", "备注前缀不能为空。");
+  }
+
+  if (notePrefix.length > 120) {
+    throw httpError(400, "invalid_note_prefix", "备注前缀最多 120 个字符。");
+  }
+
+  return notePrefix;
 }
 
 function publicEntry(entry) {
@@ -1143,6 +1178,12 @@ function renderAdmin() {
             <strong id="modeText">-</strong>
           </div>
         </div>
+
+        <label class="note-prefix-field" for="notePrefixInput">
+          <span>余额备注前缀</span>
+          <input id="notePrefixInput" type="text" maxlength="120" placeholder="Daily check-in" />
+          <small>签到成功后写入 Sub2API 余额调整备注，例如：Daily check-in 2026-05-31 0.1 USD。</small>
+        </label>
 
         <form id="rulesForm">
           <div class="rules" id="rules"></div>

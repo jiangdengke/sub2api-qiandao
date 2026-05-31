@@ -12,6 +12,7 @@ const elements = {
   unitText: document.querySelector("#unitText"),
   timezoneText: document.querySelector("#timezoneText"),
   modeText: document.querySelector("#modeText"),
+  notePrefixInput: document.querySelector("#notePrefixInput"),
   rules: document.querySelector("#rules"),
   rulesForm: document.querySelector("#rulesForm"),
   addRuleButton: document.querySelector("#addRuleButton"),
@@ -74,17 +75,19 @@ async function saveConfig() {
     const data = await adminFetch("/api/admin/config", {
       method: "PUT",
       body: {
+        notePrefix: elements.notePrefixInput.value.trim(),
         rewardRules
       }
     });
     state.config = {
       ...state.config,
+      notePrefix: data.notePrefix,
       rewardRules: data.rewardRules,
       rewardSummary: data.rewardSummary
     };
     renderRules(data.rewardRules);
     renderSummary(state.config);
-    showMessage("奖励配置已保存，新签到会立即使用。", "success");
+    showMessage("签到规则已保存，新签到会立即使用。", "success");
   } catch (error) {
     showMessage(error.message, "error");
   }
@@ -123,6 +126,7 @@ function renderSummary(data) {
   elements.unitText.textContent = data.unit;
   elements.timezoneText.textContent = data.timezone;
   elements.modeText.textContent = data.rewardSummary?.mode === "weighted_random" ? "随机权重" : "固定奖励";
+  elements.notePrefixInput.value = data.notePrefix || "";
 }
 
 function renderRules(rules) {

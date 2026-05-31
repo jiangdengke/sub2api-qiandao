@@ -181,6 +181,20 @@ button {
   margin-top: 6px;
 }
 
+.note-prefix-field {
+  margin: -4px 0 22px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.46);
+}
+
+.note-prefix-field small {
+  color: var(--muted);
+  font-weight: 600;
+  line-height: 1.6;
+}
+
 .rules {
   display: grid;
   gap: 12px;
