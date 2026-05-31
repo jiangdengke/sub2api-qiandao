@@ -35,7 +35,7 @@ button {
 .shell {
   width: min(1500px, 100%);
   margin: 0 auto;
-  padding: clamp(18px, 3vw, 30px);
+  padding: clamp(12px, 2vw, 20px);
 }
 
 .page-head,
@@ -50,15 +50,15 @@ button {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 18px;
-  padding: 22px;
-  border-radius: 18px;
+  gap: 14px;
+  padding: 16px 18px;
+  border-radius: 16px;
 }
 
 .eyebrow {
-  margin: 0 0 8px;
+  margin: 0 0 6px;
   color: var(--brand);
-  font-size: 0.75rem;
+  font-size: 0.68rem;
   font-weight: 900;
   letter-spacing: 0.18em;
   text-transform: uppercase;
@@ -67,7 +67,7 @@ button {
 h1,
 h2 {
   margin: 0;
-  font-size: clamp(1.35rem, 4vw, 2rem);
+  font-size: clamp(1.1rem, 3vw, 1.55rem);
   line-height: 1.2;
 }
 
@@ -76,8 +76,9 @@ h2 {
 }
 
 .summary {
-  margin: 10px 0 0;
+  margin: 6px 0 0;
   color: var(--muted);
+  font-size: 0.92rem;
   line-height: 1.65;
 }
 
@@ -96,8 +97,9 @@ h2 {
 }
 
 .checkin-button {
-  min-width: 170px;
-  padding: 14px 22px;
+  min-width: 140px;
+  padding: 11px 18px;
+  font-size: 0.94rem;
 }
 
 .checkin-button:hover:not(:disabled),
@@ -114,28 +116,28 @@ h2 {
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-  margin-top: 14px;
+  gap: 10px;
+  margin-top: 10px;
 }
 
 .stat-card {
-  min-height: 104px;
-  padding: 18px;
-  border-radius: 16px;
+  min-height: 78px;
+  padding: 14px 16px;
+  border-radius: 14px;
 }
 
 .stat-card span {
   display: block;
   color: var(--muted);
-  font-size: 0.86rem;
+  font-size: 0.78rem;
   font-weight: 800;
 }
 
 .stat-card strong {
   display: block;
-  margin-top: 14px;
+  margin-top: 9px;
   overflow: hidden;
-  font-size: clamp(1.25rem, 3.6vw, 2rem);
+  font-size: clamp(1.05rem, 2.8vw, 1.55rem);
   line-height: 1.1;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -144,13 +146,13 @@ h2 {
 .content-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 360px;
-  gap: 14px;
-  margin-top: 14px;
+  gap: 10px;
+  margin-top: 10px;
 }
 
 .panel {
-  border-radius: 18px;
-  padding: 18px;
+  border-radius: 16px;
+  padding: 16px;
 }
 
 .panel-head {
