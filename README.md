@@ -56,6 +56,12 @@ docker run -d \
 curl http://127.0.0.1:8787/checkin/healthz
 ```
 
+查看运行日志：
+
+```bash
+docker logs -f sub2api-qiandao
+```
+
 ## 镜像发布
 
 推送到 `master` 分支或推送 `v*` tag 时，GitHub Actions 会构建并发布多架构镜像到 GitHub Container Registry：
@@ -65,6 +71,32 @@ ghcr.io/jiangdengke/sub2api-qiandao:latest
 ghcr.io/jiangdengke/sub2api-qiandao:<tag>
 ghcr.io/jiangdengke/sub2api-qiandao:sha-<commit>
 ```
+
+## 日志
+
+服务会输出带事件名的 JSON 日志，方便 `docker logs`、Loki 或其他日志系统采集。
+
+启动成功示例：
+
+```text
+[sub2api-qiandao] {"time":"2026-05-31T07:30:00.000Z","level":"info","event":"service.started","port":8787,"publicBasePath":"/checkin","sub2apiBaseUrl":"http://sub2api:3000","checkinAmount":0.1,"checkinUnit":"USD","timezone":"Asia/Shanghai"}
+```
+
+Sub2API 连接探测成功示例：
+
+```text
+[sub2api-qiandao] {"time":"2026-05-31T07:30:01.000Z","level":"info","event":"sub2api.connection.ok","baseUrl":"http://sub2api:3000","authMePath":"/api/v1/auth/me","status":401}
+```
+
+`status` 是 `401` 也表示目标服务可连接，因为启动探测不会携带用户登录态。
+
+用户签到成功示例：
+
+```text
+[sub2api-qiandao] {"time":"2026-05-31T07:31:00.000Z","level":"info","event":"checkin.success","user":{"id":"12","name":"demo","email":"demo@example.com"},"date":"2026-05-31","amount":0.1,"unit":"USD","upstreamStatus":200,"createdAt":"2026-05-31T07:31:00.000Z"}
+```
+
+重复签到会输出 `checkin.duplicate`，余额接口失败会输出 `sub2api.balance.failed`。
 
 ## Sub2API 中配置菜单
 

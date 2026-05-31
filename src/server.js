@@ -59,10 +59,22 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(config.port, () => {
-  console.log(`[sub2api-qiandao] listening on :${config.port}${config.publicBasePath}`);
+  logInfo("service.started", {
+    port: config.port,
+    publicBasePath: config.publicBasePath,
+    sub2apiBaseUrl: config.sub2apiBaseUrl,
+    checkinAmount: config.checkinAmount,
+    checkinUnit: config.checkinUnit,
+    timezone: config.checkinTimezone
+  });
+
   if (!config.adminApiKey && !config.adminAuthValue) {
-    console.warn("[sub2api-qiandao] SUB2API_ADMIN_API_KEY is empty; check-in will fail.");
+    logWarn("config.missing_admin_api_key", {
+      message: "SUB2API_ADMIN_API_KEY is empty; check-in will fail."
+    });
   }
+
+  void probeSub2api();
 });
 
 async function route(req, res) {
@@ -140,6 +152,14 @@ async function checkIn(user) {
     const existing = findEntry(store, user.id, date);
 
     if (existing) {
+      logInfo("checkin.duplicate", {
+        user: logUser(user),
+        date,
+        amount: existing.amount,
+        unit: existing.unit,
+        originalCreatedAt: existing.createdAt
+      });
+
       return {
         ok: true,
         alreadyCheckedIn: true,
@@ -165,6 +185,15 @@ async function checkIn(user) {
 
     store.entries.push(entry);
     await saveStore(store);
+
+    logInfo("checkin.success", {
+      user: logUser(user),
+      date,
+      amount: entry.amount,
+      unit: entry.unit,
+      upstreamStatus: upstream.status,
+      createdAt: entry.createdAt
+    });
 
     return {
       ok: true,
@@ -198,9 +227,16 @@ async function resolveCurrentUser(req) {
   const user = extractUser(upstream.body);
 
   if (!user?.id) {
-    console.error("[sub2api:user:unrecognized]", upstream.body);
+    logError("sub2api.user.unrecognized", {
+      body: upstream.body
+    });
     throw httpError(502, "unrecognized_user_response", "无法从 Sub2API 用户接口解析用户 ID。");
   }
+
+  logInfo("sub2api.user.verified", {
+    user: logUser(user),
+    upstreamStatus: upstream.status
+  });
 
   return user;
 }
@@ -256,7 +292,10 @@ async function addUserBalance(userId, amount, note) {
   });
 
   if (!upstream.ok) {
-    console.error("[sub2api:balance:error]", {
+    logError("sub2api.balance.failed", {
+      userId: String(userId),
+      amount,
+      operation: config.balanceOperation,
       status: upstream.status,
       body: upstream.body
     });
@@ -266,13 +305,42 @@ async function addUserBalance(userId, amount, note) {
   return upstream;
 }
 
+async function probeSub2api() {
+  const url = `${config.sub2apiBaseUrl}${config.authMePath}`;
+
+  try {
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Accept: "application/json"
+      }
+    });
+
+    logInfo("sub2api.connection.ok", {
+      baseUrl: config.sub2apiBaseUrl,
+      authMePath: config.authMePath,
+      status: response.status
+    });
+  } catch (error) {
+    logError("sub2api.connection.failed", {
+      baseUrl: config.sub2apiBaseUrl,
+      authMePath: config.authMePath,
+      message: error.message
+    });
+  }
+}
+
 async function fetchJson(url, options) {
   let response;
 
   try {
     response = await fetch(url, options);
   } catch (error) {
-    console.error("[sub2api:fetch:error]", url, error);
+    logError("sub2api.fetch.failed", {
+      url,
+      method: options?.method || "GET",
+      message: error.message
+    });
     throw httpError(502, "sub2api_unreachable", "无法连接 Sub2API。");
   }
 
@@ -345,6 +413,48 @@ function publicUser(user) {
     email: user.email || "",
     balance: user.balance ?? null
   };
+}
+
+function logUser(user) {
+  return {
+    id: String(user.id),
+    name: user.name || "",
+    email: user.email || ""
+  };
+}
+
+function logInfo(event, data = {}) {
+  writeLog("info", event, data);
+}
+
+function logWarn(event, data = {}) {
+  writeLog("warn", event, data);
+}
+
+function logError(event, data = {}) {
+  writeLog("error", event, data);
+}
+
+function writeLog(level, event, data) {
+  const payload = {
+    time: new Date().toISOString(),
+    level,
+    event,
+    ...data
+  };
+  const line = `[sub2api-qiandao] ${JSON.stringify(payload)}`;
+
+  if (level === "error") {
+    console.error(line);
+    return;
+  }
+
+  if (level === "warn") {
+    console.warn(line);
+    return;
+  }
+
+  console.log(line);
 }
 
 function extractUser(payload) {
