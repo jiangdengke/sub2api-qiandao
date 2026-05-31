@@ -6,9 +6,9 @@
 
 - 管理员 API Key 只保存在服务端，不暴露给浏览器。
 - 每个用户每天只能签到一次，按 `CHECKIN_TIMEZONE` 计算日期。
-- 使用本地 JSON 文件持久化签到记录，适合单实例部署。
+- 使用本地 SQLite 文件持久化签到记录和奖励规则，不需要单独启动数据库服务。
 - 前端可直接作为 Sub2API 自定义菜单 iframe 页面。
-- 零 npm 依赖，Node.js 20+ 即可运行。
+- 零 npm 依赖，Node.js 24+ 即可运行。
 
 ## 快速启动
 
@@ -25,6 +25,7 @@ SUB2API_ADMIN_API_KEY=your-admin-api-key
 CHECKIN_AMOUNT=0.1
 CHECKIN_UNIT=USD
 CHECKIN_ADMIN_PASSWORD=change-this-password
+CHECKIN_DB_FILE=./data/checkins.db
 ```
 
 本地运行：
@@ -135,7 +136,29 @@ CHECKIN_REWARD_RULES=0.05:80:Small,0.1:15:Normal,1:5:Lucky
 - `0.1` 权重 `15`
 - `1` 权重 `5`
 
-概率按权重占比计算，所以分别是 `80%`、`15%`、`5%`。管理端保存后，规则会写入 `DATA_FILE`，后续重启仍然生效。
+概率按权重占比计算，所以分别是 `80%`、`15%`、`5%`。管理端保存后，规则会写入 SQLite 数据库，后续重启仍然生效。
+
+## SQLite 存储
+
+SQLite 不需要单独启动服务。签到服务会直接读写一个本地数据库文件：
+
+```dotenv
+CHECKIN_DB_FILE=./data/checkins.db
+```
+
+Docker 部署时，只要继续挂载 `./data:/app/data`，数据库文件就会保存在宿主机：
+
+```text
+./data/checkins.db
+```
+
+如果旧版本已经生成过 JSON 文件：
+
+```text
+./data/checkins.json
+```
+
+服务启动时会在 SQLite 为空的情况下自动迁移旧 JSON 里的签到记录和奖励规则。迁移完成后，新的写入只进入 SQLite。
 
 ## Sub2API 中配置菜单
 
@@ -169,7 +192,7 @@ URL：https://你的-sub2api-域名/checkin/
 3. 本服务调用 `SUB2API_AUTH_ME_PATH` 验证用户并解析用户 ID。
 4. 用户点击签到后，本服务检查 `user_id + date` 是否已存在。
 5. 未签到时，本服务调用管理员余额接口给用户加余额。
-6. 写入 `DATA_FILE`，后续重复点击只返回已签到。
+6. 写入 SQLite，后续重复点击只返回已签到。
 
 默认余额接口请求体为：
 
@@ -200,7 +223,7 @@ SUB2API_ADMIN_AUTH_VALUE=Bearer your-admin-api-key
 
 ## 生产注意事项
 
-- 当前 JSON 存储只适合单实例。如果要多副本部署，应改成 PostgreSQL、MySQL 或 Redis 原子去重。
+- SQLite 适合单实例部署。如果要多副本、多服务器共享写入，应改成 PostgreSQL、MySQL 或 Redis 原子去重。
 - 如果反代时去掉了 `/checkin` 前缀，把 `PUBLIC_BASE_PATH=/`。
 - 如果用户接口不是 `/api/v1/auth/me`，修改 `SUB2API_AUTH_ME_PATH`。
 - 如果前端无法自动识别 token，可把实际 localStorage key 加到 `PUBLIC_TOKEN_STORAGE_KEYS`。

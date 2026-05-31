@@ -1,7 +1,8 @@
 import { createServer } from "node:http";
 import { timingSafeEqual } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
+import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -26,7 +27,8 @@ const config = {
   checkinTimezone: process.env.CHECKIN_TIMEZONE || "Asia/Shanghai",
   checkinNotePrefix: process.env.CHECKIN_NOTE_PREFIX || "Daily check-in",
   checkinAdminPassword: process.env.CHECKIN_ADMIN_PASSWORD || "",
-  dataFile: path.resolve(rootDir, process.env.DATA_FILE || "./data/checkins.json"),
+  dbFile: path.resolve(rootDir, process.env.CHECKIN_DB_FILE || process.env.SQLITE_FILE || "./data/checkins.db"),
+  legacyDataFile: path.resolve(rootDir, process.env.DATA_FILE || "./data/checkins.json"),
   publicTokenStorageKeys: splitCsv(
     process.env.PUBLIC_TOKEN_STORAGE_KEYS ||
       "token,access_token,auth_token,sub2api_token,auth-storage,user,sub2api-auth"
@@ -44,6 +46,7 @@ const staticFiles = new Map([
 ]);
 
 let storeLock = Promise.resolve();
+let db;
 
 const server = createServer(async (req, res) => {
   try {
@@ -63,11 +66,14 @@ const server = createServer(async (req, res) => {
   }
 });
 
+await initStorage();
+
 server.listen(config.port, () => {
   logInfo("service.started", {
     port: config.port,
     publicBasePath: config.publicBasePath,
     sub2apiBaseUrl: config.sub2apiBaseUrl,
+    dbFile: config.dbFile,
     checkinAmount: config.checkinAmount,
     checkinUnit: config.checkinUnit,
     timezone: config.checkinTimezone
@@ -109,8 +115,8 @@ async function route(req, res) {
   }
 
   if (method === "GET" && routePath === "/api/config") {
-    const store = await loadStore();
-    const rewardSummary = summarizeRewardRules(store.rewardRules);
+    const rewardRules = getRewardRules();
+    const rewardSummary = summarizeRewardRules(rewardRules);
 
     sendJson(res, 200, {
       ok: true,
@@ -126,15 +132,15 @@ async function route(req, res) {
 
   if (method === "GET" && routePath === "/api/admin/config") {
     requireAdmin(req);
-    const store = await loadStore();
+    const rewardRules = getRewardRules();
 
     sendJson(res, 200, {
       ok: true,
       unit: config.checkinUnit,
       timezone: config.checkinTimezone,
-      rewardRules: store.rewardRules,
-      rewardSummary: summarizeRewardRules(store.rewardRules),
-      recentEntries: store.entries.slice(-30).reverse().map(publicAdminEntry)
+      rewardRules,
+      rewardSummary: summarizeRewardRules(rewardRules),
+      recentEntries: getRecentEntries(30).map(publicAdminEntry)
     });
     return;
   }
@@ -144,12 +150,7 @@ async function route(req, res) {
     const body = await readJsonBody(req);
     const rewardRules = validateRewardRules(body?.rewardRules);
 
-    await withStoreLock(async () => {
-      const store = await loadStore();
-      store.rewardRules = rewardRules;
-      store.updatedAt = new Date().toISOString();
-      await saveStore(store);
-    });
+    saveRewardRules(rewardRules);
 
     logInfo("admin.reward_rules.updated", {
       count: rewardRules.length,
@@ -167,8 +168,7 @@ async function route(req, res) {
   if (method === "GET" && routePath === "/api/me") {
     const user = await resolveCurrentUser(req);
     const date = dateKey(new Date(), config.checkinTimezone);
-    const store = await loadStore();
-    const entry = findEntry(store, user.id, date);
+    const entry = findEntry(user.id, date);
 
     sendJson(res, 200, {
       ok: true,
@@ -208,8 +208,7 @@ async function route(req, res) {
 async function checkIn(user) {
   return withStoreLock(async () => {
     const date = dateKey(new Date(), config.checkinTimezone);
-    const store = await loadStore();
-    const existing = findEntry(store, user.id, date);
+    const existing = findEntry(user.id, date);
 
     if (existing) {
       logInfo("checkin.duplicate", {
@@ -229,7 +228,7 @@ async function checkIn(user) {
       };
     }
 
-    const reward = pickReward(store.rewardRules);
+    const reward = pickReward(getRewardRules());
     const note = `${config.checkinNotePrefix} ${date} ${reward.amount} ${config.checkinUnit}`;
     const upstream = await addUserBalance(user.id, reward.amount, note);
     const entry = {
@@ -247,8 +246,7 @@ async function checkIn(user) {
       upstreamStatus: upstream.status
     };
 
-    store.entries.push(entry);
-    await saveStore(store);
+    insertCheckin(entry);
 
     logInfo("checkin.success", {
       user: logUser(user),
@@ -429,35 +427,264 @@ async function fetchJson(url, options) {
   };
 }
 
-async function loadStore() {
-  try {
-    const raw = await readFile(config.dataFile, "utf8");
-    const parsed = JSON.parse(raw);
-    return normalizeStore(parsed);
-  } catch (error) {
-    if (error.code === "ENOENT") {
-      return normalizeStore({});
-    }
-
-    throw error;
-  }
-}
-
-async function saveStore(store) {
-  await mkdir(path.dirname(config.dataFile), { recursive: true });
-  const tmpFile = `${config.dataFile}.${process.pid}.tmp`;
-  await writeFile(tmpFile, `${JSON.stringify(store, null, 2)}\n`, "utf8");
-  await rename(tmpFile, config.dataFile);
-}
-
 function withStoreLock(task) {
   const next = storeLock.then(task, task);
   storeLock = next.catch(() => {});
   return next;
 }
 
-function findEntry(store, userId, date) {
-  return store.entries.find((entry) => entry.userId === String(userId) && entry.date === date);
+async function initStorage() {
+  await mkdir(path.dirname(config.dbFile), { recursive: true });
+  db = new DatabaseSync(config.dbFile);
+  db.exec("PRAGMA journal_mode = WAL");
+  db.exec("PRAGMA foreign_keys = ON");
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS reward_rules (
+      id TEXT PRIMARY KEY,
+      label TEXT NOT NULL,
+      amount REAL NOT NULL CHECK (amount > 0),
+      weight REAL NOT NULL CHECK (weight >= 0),
+      enabled INTEGER NOT NULL DEFAULT 1,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS checkins (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      user_name TEXT NOT NULL DEFAULT '',
+      date TEXT NOT NULL,
+      amount REAL NOT NULL,
+      unit TEXT NOT NULL,
+      reward_rule_id TEXT NOT NULL DEFAULT '',
+      reward_label TEXT NOT NULL DEFAULT '',
+      reward_weight REAL NOT NULL DEFAULT 0,
+      note TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      upstream_status INTEGER,
+      UNIQUE (user_id, date)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_checkins_created_at ON checkins (created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_checkins_user_date ON checkins (user_id, date);
+  `);
+
+  await migrateLegacyJsonIfNeeded();
+  seedRewardRulesIfNeeded();
+
+  logInfo("storage.sqlite.ready", {
+    dbFile: config.dbFile
+  });
+}
+
+async function migrateLegacyJsonIfNeeded() {
+  if (countRows("checkins") > 0 || countRows("reward_rules") > 0) {
+    return;
+  }
+
+  let legacy;
+
+  try {
+    legacy = JSON.parse(await readFile(config.legacyDataFile, "utf8"));
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return;
+    }
+
+    throw error;
+  }
+
+  const store = normalizeStore(legacy);
+
+  db.exec("BEGIN");
+
+  try {
+    replaceRewardRules(store.rewardRules);
+
+    for (const entry of store.entries) {
+      insertCheckin({
+        id: entry.id || `${entry.date}:${entry.userId}`,
+        userId: entry.userId,
+        userName: entry.userName || "",
+        date: entry.date,
+        amount: Number(entry.amount),
+        unit: entry.unit || config.checkinUnit,
+        rewardRuleId: entry.rewardRuleId || "",
+        rewardLabel: entry.rewardLabel || "",
+        rewardWeight: Number(entry.rewardWeight || 0),
+        note: entry.note || "",
+        createdAt: entry.createdAt || new Date().toISOString(),
+        upstreamStatus: entry.upstreamStatus || null
+      });
+    }
+
+    setSetting("legacy_json_migrated_from", config.legacyDataFile);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+
+  logInfo("storage.legacy_json.migrated", {
+    legacyDataFile: config.legacyDataFile,
+    entries: store.entries.length,
+    rewardRules: store.rewardRules.length
+  });
+}
+
+function seedRewardRulesIfNeeded() {
+  if (countRows("reward_rules") > 0) {
+    return;
+  }
+
+  replaceRewardRules(normalizeRewardRules([]));
+}
+
+function countRows(tableName) {
+  return db.prepare(`SELECT COUNT(*) AS count FROM ${tableName}`).get().count;
+}
+
+function getRewardRules() {
+  const rows = db
+    .prepare(
+      `SELECT id, label, amount, weight, enabled
+       FROM reward_rules
+       ORDER BY sort_order ASC, rowid ASC`
+    )
+    .all();
+
+  return normalizeRewardRules(
+    rows.map((row) => ({
+      id: row.id,
+      label: row.label,
+      amount: row.amount,
+      weight: row.weight,
+      enabled: Boolean(row.enabled)
+    }))
+  );
+}
+
+function saveRewardRules(rewardRules) {
+  db.exec("BEGIN");
+
+  try {
+    replaceRewardRules(rewardRules);
+    setSetting("reward_rules_updated_at", new Date().toISOString());
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+function replaceRewardRules(rewardRules) {
+  db.prepare("DELETE FROM reward_rules").run();
+
+  const statement = db.prepare(`
+    INSERT INTO reward_rules (id, label, amount, weight, enabled, sort_order, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `);
+  const now = new Date().toISOString();
+
+  rewardRules.forEach((rule, index) => {
+    statement.run(rule.id, rule.label, rule.amount, rule.weight, rule.enabled ? 1 : 0, index, now);
+  });
+}
+
+function findEntry(userId, date) {
+  const row = db
+    .prepare(
+      `SELECT
+        id,
+        user_id AS userId,
+        user_name AS userName,
+        date,
+        amount,
+        unit,
+        reward_rule_id AS rewardRuleId,
+        reward_label AS rewardLabel,
+        reward_weight AS rewardWeight,
+        note,
+        created_at AS createdAt,
+        upstream_status AS upstreamStatus
+       FROM checkins
+       WHERE user_id = ? AND date = ?
+       LIMIT 1`
+    )
+    .get(String(userId), date);
+
+  return row || null;
+}
+
+function insertCheckin(entry) {
+  db.prepare(
+    `INSERT INTO checkins (
+      id,
+      user_id,
+      user_name,
+      date,
+      amount,
+      unit,
+      reward_rule_id,
+      reward_label,
+      reward_weight,
+      note,
+      created_at,
+      upstream_status
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(
+    entry.id,
+    String(entry.userId),
+    entry.userName || "",
+    entry.date,
+    entry.amount,
+    entry.unit,
+    entry.rewardRuleId || "",
+    entry.rewardLabel || "",
+    entry.rewardWeight || 0,
+    entry.note || "",
+    entry.createdAt,
+    entry.upstreamStatus || null
+  );
+}
+
+function getRecentEntries(limit) {
+  return db
+    .prepare(
+      `SELECT
+        id,
+        user_id AS userId,
+        user_name AS userName,
+        date,
+        amount,
+        unit,
+        reward_rule_id AS rewardRuleId,
+        reward_label AS rewardLabel,
+        reward_weight AS rewardWeight,
+        note,
+        created_at AS createdAt,
+        upstream_status AS upstreamStatus
+       FROM checkins
+       ORDER BY created_at DESC
+       LIMIT ?`
+    )
+    .all(limit);
+}
+
+function setSetting(key, value) {
+  db.prepare(
+    `INSERT INTO settings (key, value, updated_at)
+     VALUES (?, ?, ?)
+     ON CONFLICT(key) DO UPDATE SET
+       value = excluded.value,
+       updated_at = excluded.updated_at`
+  ).run(key, String(value), new Date().toISOString());
 }
 
 function publicEntry(entry) {

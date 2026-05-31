@@ -1,7 +1,7 @@
 {
   "name": "sub2api-qiandao",
   "version": "0.1.0",
-  "description": "A small daily check-in service for Sub2API custom iframe tabs.",
+  "description": "A SQLite-backed daily check-in service for Sub2API custom iframe tabs.",
   "type": "module",
   "private": true,
   "scripts": {
@@ -11,6 +11,6 @@
     "check": "node --check src/server.js && node --check public/app.js && node --check public/admin.js"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=24.0.0"
   }
 }
