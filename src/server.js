@@ -120,12 +120,12 @@ async function route(req, res) {
 
   if (method === "GET" && routePath === "/api/config") {
     const rewardConfig = getRewardConfig();
-    const rewardSummary = rewardConfig.summary;
+    const rewardSummary = publicRewardSummary(rewardConfig.summary);
 
     sendJson(res, 200, {
       ok: true,
       basePath: config.publicBasePath,
-      amount: rewardSummary.min,
+      amount: rewardSummary.hidden ? null : rewardSummary.min,
       unit: config.checkinUnit,
       timezone: config.checkinTimezone,
       rewardSummary,
@@ -908,6 +908,26 @@ function publicUser(user) {
     name: user.name || "",
     email: user.email || "",
     balance: user.balance ?? null
+  };
+}
+
+function publicRewardSummary(summary) {
+  if (!summary || summary.mode !== "fixed") {
+    return {
+      mode: summary?.mode || "random",
+      sourceMode: summary?.sourceMode || "",
+      hidden: true,
+      display: "签到后揭晓"
+    };
+  }
+
+  return {
+    mode: "fixed",
+    sourceMode: summary.sourceMode || "fixed",
+    hidden: false,
+    min: summary.min,
+    max: summary.max,
+    display: `${summary.min}`
   };
 }
 

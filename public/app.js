@@ -338,6 +338,10 @@ function formatRewardSummary(summary, unit) {
     return `- ${unit}`;
   }
 
+  if (summary.hidden) {
+    return summary.display || "签到后揭晓";
+  }
+
   if (summary.min !== summary.max) {
     return `${formatAmount(summary.min)} - ${formatAmount(summary.max)} ${unit}`;
   }
@@ -346,6 +350,10 @@ function formatRewardSummary(summary, unit) {
 }
 
 function rewardSummaryText(summary, unit) {
+  if (summary?.hidden) {
+    return "今天签到奖励将在签到后揭晓。";
+  }
+
   if (!summary || summary.mode === "fixed") {
     return `今天签到可获得 ${formatRewardSummary(summary, unit)}`;
   }
