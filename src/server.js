@@ -997,8 +997,7 @@ function publicRewardSummary(summary) {
     return {
       mode: summary?.mode || "random",
       sourceMode: summary?.sourceMode || "",
-      hidden: true,
-      display: "签到后揭晓"
+      hidden: true
     };
   }
 
@@ -1545,7 +1544,7 @@ function renderIndex() {
           <span>当前账号</span>
           <strong id="userName">-</strong>
         </article>
-        <article class="stat-card">
+        <article class="stat-card" id="rewardCard">
           <span>今日奖励</span>
           <strong id="rewardAmount">-</strong>
         </article>

@@ -11,6 +11,7 @@ const elements = {
   summary: document.querySelector("#summary"),
   identity: document.querySelector("#identity"),
   userName: document.querySelector("#userName"),
+  rewardCard: document.querySelector("#rewardCard"),
   rewardAmount: document.querySelector("#rewardAmount"),
   monthTotal: document.querySelector("#monthTotal"),
   checkinButton: document.querySelector("#checkinButton"),
@@ -46,7 +47,7 @@ async function boot() {
   try {
     state.config = await apiFetch("/api/config", { skipAuth: true });
     state.token = findUserToken(state.config.tokenStorageKeys || []);
-    elements.rewardAmount.textContent = formatRewardSummary(state.config.rewardSummary, state.config.unit);
+    renderRewardCard(state.config.rewardSummary, state.config.unit);
     await refreshMe();
     await refreshCalendar();
   } catch (error) {
@@ -333,13 +334,23 @@ function formatEntry(entry) {
   return `已领取 ${formatAmount(entry.amount)} ${entry.unit}${label}，发放时间 ${formatTime(entry.createdAt)}。`;
 }
 
+function renderRewardCard(summary, unit) {
+  if (summary?.hidden) {
+    elements.rewardCard.hidden = true;
+    return;
+  }
+
+  elements.rewardCard.hidden = false;
+  elements.rewardAmount.textContent = formatRewardSummary(summary, unit);
+}
+
 function formatRewardSummary(summary, unit) {
   if (!summary) {
     return `- ${unit}`;
   }
 
   if (summary.hidden) {
-    return summary.display || "签到后揭晓";
+    return summary.display || "随机奖励";
   }
 
   if (summary.min !== summary.max) {
@@ -351,7 +362,7 @@ function formatRewardSummary(summary, unit) {
 
 function rewardSummaryText(summary, unit) {
   if (summary?.hidden) {
-    return "今天签到奖励将在签到后揭晓。";
+    return "每天签到一次，奖励到账后会记录在日历中。";
   }
 
   if (!summary || summary.mode === "fixed") {
