@@ -67,29 +67,138 @@ docker run -d \
   ghcr.io/jiangdengke/sub2api-qiandao:latest
 ```
 
+## 生产部署
+
+推荐结构是：
+
+```text
+用户浏览器 -> https://你的-sub2api-域名/checkin/ -> 反代 -> sub2api-qiandao:8787
+用户浏览器 -> https://你的-sub2api-域名/         -> 反代 -> Sub2API
+```
+
+这样签到页和 Sub2API 保持同源，iframe 才能读取 Sub2API 的登录态。
+
+### 1. 准备配置
+
+```bash
+cp .env.example .env
+```
+
+至少修改这些值：
+
+```dotenv
+SUB2API_BASE_URL=http://host.docker.internal:18080
+SUB2API_ADMIN_API_KEY=你的-sub2api-admin-api-key
+CHECKIN_ADMIN_PASSWORD=换成一个强密码
+CHECKIN_TIMEZONE=Asia/Shanghai
+```
+
+`SUB2API_BASE_URL` 按部署方式选择：
+
+- qiandao 用 Docker，Sub2API/Caddy/Nginx 在宿主机：`http://host.docker.internal:18080`
+- qiandao 和 Sub2API 在同一个 Docker Compose 网络：`http://sub2api:3000`
+- qiandao 不在 Docker，Sub2API 也在同一台机器：`http://127.0.0.1:3000`
+- 已经有公网 HTTPS 域名并且能从容器访问：`https://你的-sub2api-域名`
+
+`docker-compose.yml` 已包含：
+
+```yaml
+extra_hosts:
+  - "host.docker.internal:host-gateway"
+```
+
+所以 Linux 服务器上也可以在容器里访问宿主机的 `host.docker.internal`。
+
+### 2. 启动服务
+
+```bash
+docker compose pull
+docker compose up -d
+docker logs -f sub2api-qiandao
+```
+
 健康检查：
 
 ```bash
 curl http://127.0.0.1:8787/checkin/healthz
 ```
 
-查看运行日志：
+### 3. 配置反代
 
-```bash
-docker logs -f sub2api-qiandao
+如果你已经有 Caddy 监听域名 80/443，并把根路径转发给 Sub2API，可以加 `/checkin/*` 分流：
+
+```caddyfile
+ai.laodog.top {
+  handle /checkin/* {
+    reverse_proxy 127.0.0.1:8787
+  }
+
+  handle {
+    reverse_proxy 127.0.0.1:3000
+  }
+}
 ```
 
-管理端：
+如果 Caddy 和 Sub2API 都在宿主机，qiandao 容器里的 `.env` 可以写：
+
+```dotenv
+SUB2API_BASE_URL=http://host.docker.internal:3000
+```
+
+如果你希望 qiandao 通过 Caddy 再访问 Sub2API，可以写：
+
+```dotenv
+SUB2API_BASE_URL=http://host.docker.internal:80
+```
+
+Nginx 示例：
+
+```nginx
+location /checkin/ {
+  proxy_pass http://127.0.0.1:8787/checkin/;
+  proxy_set_header Host $host;
+  proxy_set_header X-Real-IP $remote_addr;
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+  proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+如果反代使用 `handle_path` 或其他方式去掉了 `/checkin` 前缀，需要把 `.env` 改成：
+
+```dotenv
+PUBLIC_BASE_PATH=/
+```
+
+默认推荐不要去掉前缀，保持 `PUBLIC_BASE_PATH=/checkin`。
+
+### 4. 配置 Sub2API 自定义菜单
+
+在 Sub2API 管理后台添加自定义菜单：
 
 ```text
-http://127.0.0.1:8787/checkin/admin/
+名称：每日签到
+URL：https://你的-sub2api-域名/checkin/
+可见性：用户
+打开方式：iframe
 ```
 
-反代到 Sub2API 同源后：
+管理端地址：
 
 ```text
 https://你的-sub2api-域名/checkin/admin/
 ```
+
+### 5. 更新镜像
+
+每次 GitHub Actions 发布新镜像后，服务器执行：
+
+```bash
+docker compose pull
+docker compose up -d
+docker logs -f sub2api-qiandao
+```
+
+数据库在 `./data/checkins.db`，只要继续挂载 `./data:/app/data`，更新容器不会丢数据。
 
 ## 镜像发布
 
@@ -197,31 +306,6 @@ Docker 部署时，只要继续挂载 `./data:/app/data`，数据库文件就会
 ```
 
 服务启动时会在 SQLite 为空的情况下自动迁移旧 JSON 里的签到记录和奖励规则。迁移完成后，新的写入只进入 SQLite。
-
-## Sub2API 中配置菜单
-
-推荐把本服务反代到 Sub2API 同源路径，例如：
-
-```nginx
-location /checkin/ {
-  proxy_pass http://127.0.0.1:8787/checkin/;
-  proxy_set_header Host $host;
-  proxy_set_header X-Real-IP $remote_addr;
-  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-  proxy_set_header X-Forwarded-Proto $scheme;
-}
-```
-
-然后在 Sub2API 管理后台的自定义菜单里添加：
-
-```text
-名称：每日签到
-URL：https://你的-sub2api-域名/checkin/
-可见性：用户
-打开方式：iframe
-```
-
-同源部署很重要：如果 Sub2API 前端把登录 token 存在 `localStorage`，iframe 只有在同源时才能读取并转交给签到服务验证。服务端也会转发 cookie 登录态，因此 cookie 鉴权部署也可工作。
 
 ## 工作流程
 
