@@ -1831,6 +1831,7 @@ function renderAdmin() {
 
       <nav class="admin-tabs" id="adminTabs" aria-label="管理端导航" hidden>
         <button class="tab-button" type="button" data-tab="overview">总览</button>
+        <button class="tab-button" type="button" data-tab="leaderboard">排行榜</button>
         <button class="tab-button" type="button" data-tab="rewards">奖励规则</button>
         <button class="tab-button" type="button" data-tab="records">签到记录</button>
         <button class="tab-button" type="button" data-tab="system">系统信息</button>
@@ -1902,15 +1903,18 @@ function renderAdmin() {
             <div class="breakdown-list" id="rewardBreakdownList"></div>
           </article>
         </section>
+      </section>
 
+      <section class="tab-page" id="leaderboardPanel" data-panel="leaderboard" hidden>
         <section class="panel streak-panel">
           <div class="panel-head">
             <div>
-              <p class="eyebrow">Streaks</p>
+              <p class="eyebrow">Leaderboard</p>
               <h2>连续签到榜</h2>
             </div>
             <span class="panel-note">最后签到在今天或昨天的用户</span>
           </div>
+          <p class="hint leaderboard-hint">按当前连续签到天数排序，用于观察高活跃用户。断签用户不会进入这个榜单。</p>
           <div class="streak-list" id="streakList"></div>
         </section>
       </section>
