@@ -1,13 +1,20 @@
 const state = {
   password: sessionStorage.getItem("checkinAdminPassword") || "",
-  config: null
+  config: null,
+  activeTab: sessionStorage.getItem("checkinAdminTab") || "overview",
+  recentEntries: []
 };
 
 const elements = {
   loginPanel: document.querySelector("#loginPanel"),
+  adminTabs: document.querySelector("#adminTabs"),
+  tabButtons: [...document.querySelectorAll(".tab-button")],
+  tabPanels: [...document.querySelectorAll(".tab-page")],
+  overviewPanel: document.querySelector("#overviewPanel"),
   statsPanel: document.querySelector("#statsPanel"),
   configPanel: document.querySelector("#configPanel"),
   historyPanel: document.querySelector("#historyPanel"),
+  systemPanel: document.querySelector("#systemPanel"),
   passwordInput: document.querySelector("#passwordInput"),
   loginButton: document.querySelector("#loginButton"),
   unitText: document.querySelector("#unitText"),
@@ -31,7 +38,19 @@ const elements = {
   todayAmountText: document.querySelector("#todayAmountText"),
   monthUsersText: document.querySelector("#monthUsersText"),
   monthAmountText: document.querySelector("#monthAmountText"),
+  allTimeCountText: document.querySelector("#allTimeCountText"),
+  allTimeAmountText: document.querySelector("#allTimeAmountText"),
+  allTimeUsersText: document.querySelector("#allTimeUsersText"),
+  averageRewardText: document.querySelector("#averageRewardText"),
+  trendList: document.querySelector("#trendList"),
+  rewardBreakdownList: document.querySelector("#rewardBreakdownList"),
   streakList: document.querySelector("#streakList"),
+  recordSearchInput: document.querySelector("#recordSearchInput"),
+  clearSearchButton: document.querySelector("#clearSearchButton"),
+  exportCsvButton: document.querySelector("#exportCsvButton"),
+  historyMetaText: document.querySelector("#historyMetaText"),
+  systemGrid: document.querySelector("#systemGrid"),
+  checklist: document.querySelector("#checklist"),
   history: document.querySelector("#history")
 };
 
@@ -51,6 +70,15 @@ function boot() {
   for (const input of [elements.rangeMinInput, elements.rangeMaxInput, elements.rangeStepInput]) {
     input.addEventListener("input", renderRangePreview);
   }
+  for (const button of elements.tabButtons) {
+    button.addEventListener("click", () => activateTab(button.dataset.tab));
+  }
+  elements.recordSearchInput.addEventListener("input", () => renderHistory());
+  elements.clearSearchButton.addEventListener("click", () => {
+    elements.recordSearchInput.value = "";
+    renderHistory();
+  });
+  elements.exportCsvButton.addEventListener("click", exportHistoryCsv);
   elements.addRuleButton.addEventListener("click", () => {
     addRuleRow({
       id: `rule-${Date.now()}`,
@@ -141,13 +169,14 @@ async function adminFetch(path, options = {}) {
 
 function renderConfig(data) {
   elements.loginPanel.hidden = true;
-  elements.statsPanel.hidden = false;
-  elements.configPanel.hidden = false;
-  elements.historyPanel.hidden = false;
+  elements.adminTabs.hidden = false;
+  state.recentEntries = data.recentEntries || [];
   renderStats(data.stats);
   renderSummary(data);
   renderRules(data.rewardRules);
-  renderHistory(data.recentEntries || []);
+  renderHistory();
+  renderSystem(data.system);
+  activateTab(state.activeTab);
 }
 
 function renderSummary(data) {
@@ -323,7 +352,65 @@ function renderStats(stats) {
   elements.todayAmountText.textContent = `${formatAmount(stats.todayAmount || 0)} ${stats.unit}`;
   elements.monthUsersText.textContent = `${stats.monthUsers || 0} 人`;
   elements.monthAmountText.textContent = `${formatAmount(stats.monthAmount || 0)} ${stats.unit}`;
+  elements.allTimeCountText.textContent = `${stats.allTimeCount || 0} 次`;
+  elements.allTimeAmountText.textContent = `${formatAmount(stats.allTimeAmount || 0)} ${stats.unit}`;
+  elements.allTimeUsersText.textContent = `${stats.allTimeUsers || 0} 人`;
+  elements.averageRewardText.textContent = `${formatAmount(stats.averageReward || 0)} ${stats.unit}`;
+  renderTrend(stats.dailyTrend || [], stats.unit);
+  renderRewardBreakdown(stats.rewardBreakdown || [], stats.unit);
   renderStreaks(stats.longestStreaks || []);
+}
+
+function renderTrend(trend, unit) {
+  elements.trendList.textContent = "";
+
+  if (trend.length === 0) {
+    elements.trendList.innerHTML = `<p class="empty">还没有趋势数据。</p>`;
+    return;
+  }
+
+  const maxAmount = Math.max(...trend.map((entry) => Number(entry.amount || 0)), 0);
+
+  for (const entry of trend) {
+    const amount = Number(entry.amount || 0);
+    const count = Number(entry.count || 0);
+    const width = maxAmount > 0 ? Math.max(6, Math.round((amount / maxAmount) * 100)) : 0;
+    const item = document.createElement("article");
+    item.className = "trend-item";
+    item.innerHTML = `
+      <span>${escapeHtml(entry.date.slice(5))}</span>
+      <div class="trend-track"><i style="width: ${width}%"></i></div>
+      <strong>${formatAmount(amount)} ${escapeHtml(unit)}</strong>
+      <small>${count} 次</small>
+    `;
+    elements.trendList.append(item);
+  }
+}
+
+function renderRewardBreakdown(items, unit) {
+  elements.rewardBreakdownList.textContent = "";
+
+  if (items.length === 0) {
+    elements.rewardBreakdownList.innerHTML = `<p class="empty">本月还没有奖励分布。</p>`;
+    return;
+  }
+
+  const maxCount = Math.max(...items.map((entry) => Number(entry.count || 0)), 0);
+
+  for (const entry of items) {
+    const count = Number(entry.count || 0);
+    const width = maxCount > 0 ? Math.max(8, Math.round((count / maxCount) * 100)) : 0;
+    const item = document.createElement("article");
+    item.className = "breakdown-item";
+    item.innerHTML = `
+      <div>
+        <strong>${escapeHtml(entry.label || "奖励")}</strong>
+        <span>${count} 次 · ${formatAmount(entry.totalAmount || 0)} ${escapeHtml(entry.unit || unit)}</span>
+      </div>
+      <div class="breakdown-track"><i style="width: ${width}%"></i></div>
+    `;
+    elements.rewardBreakdownList.append(item);
+  }
 }
 
 function renderStreaks(streaks) {
@@ -347,11 +434,17 @@ function renderStreaks(streaks) {
   }
 }
 
-function renderHistory(entries) {
+function renderHistory() {
+  const query = getRecordSearchQuery();
+  const entries = getFilteredEntries();
+
   elements.history.textContent = "";
+  elements.historyMetaText.textContent = query
+    ? `筛选 ${entries.length} / ${state.recentEntries.length} 条`
+    : `最近 ${state.recentEntries.length} 条`;
 
   if (entries.length === 0) {
-    elements.history.innerHTML = `<p class="empty">还没有签到记录。</p>`;
+    elements.history.innerHTML = `<p class="empty">${query ? "没有匹配的签到记录。" : "还没有签到记录。"}</p>`;
     return;
   }
 
@@ -370,9 +463,154 @@ function renderHistory(entries) {
   }
 }
 
+function renderSystem(system) {
+  if (!system) {
+    return;
+  }
+
+  const items = [
+    ["存储", system.storage],
+    ["SQLite 文件", system.dbFile],
+    ["公开路径", system.publicBasePath],
+    ["Sub2API 地址", system.sub2apiBaseUrl],
+    ["用户认证接口", system.authMePath],
+    ["余额接口模板", system.balancePathTemplate],
+    ["余额操作", system.balanceOperation],
+    ["金额字段", system.balanceAmountField],
+    ["Admin 鉴权头", system.adminAuthHeader],
+    ["时区", system.timezone],
+    ["奖励单位", system.unit]
+  ];
+
+  elements.systemGrid.textContent = "";
+  for (const [label, value] of items) {
+    const item = document.createElement("article");
+    item.className = "system-item";
+    item.innerHTML = `
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value || "-")}</strong>
+    `;
+    elements.systemGrid.append(item);
+  }
+
+  const checks = [
+    {
+      ok: Boolean(system.adminAuthConfigured),
+      title: "Sub2API 管理员 API Key",
+      text: system.adminAuthConfigured ? "已配置，签到可以尝试发放余额。" : "未配置，用户签到会失败。"
+    },
+    {
+      ok: Boolean(system.sub2apiBaseUrl),
+      title: "Sub2API 地址",
+      text: system.sub2apiBaseUrl || "未配置"
+    },
+    {
+      ok: Boolean(system.publicBasePath),
+      title: "公开路径",
+      text: `当前服务路径为 ${system.publicBasePath || "/"}`
+    }
+  ];
+
+  elements.checklist.textContent = "";
+  for (const check of checks) {
+    const item = document.createElement("article");
+    item.className = `check-item ${check.ok ? "is-ok" : "is-warn"}`;
+    item.innerHTML = `
+      <span>${check.ok ? "OK" : "!"}</span>
+      <div>
+        <strong>${escapeHtml(check.title)}</strong>
+        <small>${escapeHtml(check.text)}</small>
+      </div>
+    `;
+    elements.checklist.append(item);
+  }
+}
+
+function activateTab(tabName = "overview") {
+  const available = new Set(elements.tabButtons.map((button) => button.dataset.tab));
+  const nextTab = available.has(tabName) ? tabName : "overview";
+  state.activeTab = nextTab;
+  sessionStorage.setItem("checkinAdminTab", nextTab);
+
+  for (const button of elements.tabButtons) {
+    const active = button.dataset.tab === nextTab;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+  }
+
+  for (const panel of elements.tabPanels) {
+    panel.hidden = panel.dataset.panel !== nextTab;
+  }
+}
+
+function exportHistoryCsv() {
+  const entries = getFilteredEntries();
+  const rows = [
+    ["用户ID", "用户", "日期", "金额", "单位", "奖励", "连续天数", "上游状态", "创建时间"],
+    ...entries.map((entry) => [
+      entry.userId,
+      entry.userDisplayName || entry.userName || entry.userEmail || `用户 ${entry.userId}`,
+      entry.date,
+      entry.amount,
+      entry.unit,
+      entry.rewardLabel || "",
+      entry.streak || 0,
+      entry.upstreamStatus || "",
+      entry.createdAt || ""
+    ])
+  ];
+  const csv = rows.map((row) => row.map(escapeCsv).join(",")).join("\n");
+  const blob = new Blob([`\ufeff${csv}`], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+
+  link.href = url;
+  link.download = `checkins-${new Date().toISOString().slice(0, 10)}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function getFilteredEntries() {
+  const query = getRecordSearchQuery();
+
+  return state.recentEntries.filter((entry) => {
+    if (!query) {
+      return true;
+    }
+
+    return [
+      entry.userDisplayName,
+      entry.userName,
+      entry.userEmail,
+      entry.userId,
+      entry.date,
+      entry.rewardLabel,
+      entry.amount,
+      entry.unit
+    ]
+      .join(" ")
+      .toLowerCase()
+      .includes(query);
+  });
+}
+
+function getRecordSearchQuery() {
+  return elements.recordSearchInput.value.trim().toLowerCase();
+}
+
 function showMessage(text, tone) {
   elements.message.textContent = text;
   elements.message.dataset.tone = tone;
+}
+
+function escapeCsv(value) {
+  const text = String(value ?? "");
+
+  if (/[",\n\r]/.test(text)) {
+    return `"${text.replaceAll('"', '""')}"`;
+  }
+
+  return text;
 }
 
 function escapeHtml(value) {

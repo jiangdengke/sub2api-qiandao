@@ -149,6 +149,7 @@ async function route(req, res) {
       rewardRules: rewardConfig.rewardRules,
       rewardSummary: rewardConfig.summary,
       stats: adminStats,
+      system: getAdminSystemInfo(),
       recentEntries: getRecentEntries(30).map(publicAdminEntry)
     });
     return;
@@ -878,6 +879,7 @@ function getAdminStats() {
   const currentMonth = today.slice(0, 7);
   const todayStats = getAggregateStats(today, nextDateKey(today));
   const monthStats = getAggregateStats(`${currentMonth}-01`, nextMonthKey(currentMonth));
+  const allTimeStats = getAggregateStats("0000-00-00", "9999-99-99");
   const longestStreaks = getLongestStreaks(10, today);
 
   return {
@@ -889,6 +891,12 @@ function getAdminStats() {
     monthUsers: monthStats.users,
     monthCount: monthStats.count,
     monthAmount: monthStats.amount,
+    allTimeUsers: allTimeStats.users,
+    allTimeCount: allTimeStats.count,
+    allTimeAmount: allTimeStats.amount,
+    averageReward: allTimeStats.count > 0 ? allTimeStats.amount / allTimeStats.count : 0,
+    dailyTrend: getDailyTrend(14, today),
+    rewardBreakdown: getRewardBreakdown(currentMonth),
     longestStreaks
   };
 }
@@ -947,6 +955,61 @@ function getLongestStreaks(limit, today = dateKey(new Date(), config.checkinTime
     .slice(0, limit);
 }
 
+function getDailyTrend(days, today = dateKey(new Date(), config.checkinTimezone)) {
+  const startDate = shiftDateKey(today, -(days - 1));
+  const rows = db
+    .prepare(
+      `SELECT
+        date,
+        COUNT(*) AS count,
+        COALESCE(SUM(amount), 0) AS amount
+       FROM checkins
+       WHERE date >= ? AND date <= ?
+       GROUP BY date`
+    )
+    .all(startDate, today);
+  const byDate = new Map(rows.map((row) => [row.date, row]));
+  const trend = [];
+
+  for (let index = 0; index < days; index += 1) {
+    const date = shiftDateKey(startDate, index);
+    const row = byDate.get(date);
+
+    trend.push({
+      date,
+      count: Number(row?.count || 0),
+      amount: Number(row?.amount || 0)
+    });
+  }
+
+  return trend;
+}
+
+function getRewardBreakdown(month) {
+  return db
+    .prepare(
+      `SELECT
+        COALESCE(NULLIF(reward_label, ''), amount || ' ' || unit) AS label,
+        amount,
+        unit,
+        COUNT(*) AS count,
+        COALESCE(SUM(amount), 0) AS totalAmount
+       FROM checkins
+       WHERE date >= ? AND date < ?
+       GROUP BY label, amount, unit
+       ORDER BY count DESC, totalAmount DESC
+       LIMIT 12`
+    )
+    .all(`${month}-01`, nextMonthKey(month))
+    .map((row) => ({
+      label: row.label || "奖励",
+      amount: Number(row.amount || 0),
+      unit: row.unit || config.checkinUnit,
+      count: Number(row.count || 0),
+      totalAmount: Number(row.totalAmount || 0)
+    }));
+}
+
 function getUserCurrentStreak(userId, today = dateKey(new Date(), config.checkinTimezone)) {
   const rows = db
     .prepare(
@@ -977,6 +1040,23 @@ function getUserCurrentStreak(userId, today = dateKey(new Date(), config.checkin
   }
 
   return streak;
+}
+
+function getAdminSystemInfo() {
+  return {
+    storage: "SQLite",
+    publicBasePath: config.publicBasePath,
+    sub2apiBaseUrl: config.sub2apiBaseUrl,
+    authMePath: config.authMePath,
+    adminAuthHeader: config.adminAuthHeader,
+    adminAuthConfigured: Boolean(config.adminApiKey || config.adminAuthValue),
+    balanceOperation: config.balanceOperation,
+    balancePathTemplate: config.balancePathTemplate,
+    balanceAmountField: config.balanceAmountField,
+    dbFile: config.dbFile,
+    timezone: config.checkinTimezone,
+    unit: config.checkinUnit
+  };
 }
 
 function setSetting(key, value) {
@@ -1749,42 +1829,93 @@ function renderAdmin() {
       </section>
       <p class="message global-message" id="message"></p>
 
-      <section class="panel stats-panel" id="statsPanel" hidden>
-        <div class="panel-head">
-          <div>
-            <p class="eyebrow">Analytics</p>
-            <h2>签到统计</h2>
+      <nav class="admin-tabs" id="adminTabs" aria-label="管理端导航" hidden>
+        <button class="tab-button" type="button" data-tab="overview">总览</button>
+        <button class="tab-button" type="button" data-tab="rewards">奖励规则</button>
+        <button class="tab-button" type="button" data-tab="records">签到记录</button>
+        <button class="tab-button" type="button" data-tab="system">系统信息</button>
+      </nav>
+
+      <section class="tab-page" id="overviewPanel" data-panel="overview" hidden>
+        <section class="panel stats-panel" id="statsPanel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Analytics</p>
+              <h2>签到总览</h2>
+            </div>
+            <span class="panel-note" id="statsDateText">-</span>
           </div>
-          <span class="panel-note" id="statsDateText">-</span>
-        </div>
-        <div class="stats-grid">
-          <article>
-            <span>今日签到人数</span>
-            <strong id="todayCountText">-</strong>
+          <div class="stats-grid">
+            <article>
+              <span>今日签到人数</span>
+              <strong id="todayCountText">-</strong>
+            </article>
+            <article>
+              <span>今日发放总额</span>
+              <strong id="todayAmountText">-</strong>
+            </article>
+            <article>
+              <span>本月签到人数</span>
+              <strong id="monthUsersText">-</strong>
+            </article>
+            <article>
+              <span>本月发放总额</span>
+              <strong id="monthAmountText">-</strong>
+            </article>
+            <article>
+              <span>累计签到次数</span>
+              <strong id="allTimeCountText">-</strong>
+            </article>
+            <article>
+              <span>累计发放总额</span>
+              <strong id="allTimeAmountText">-</strong>
+            </article>
+            <article>
+              <span>累计签到用户</span>
+              <strong id="allTimeUsersText">-</strong>
+            </article>
+            <article>
+              <span>平均单次奖励</span>
+              <strong id="averageRewardText">-</strong>
+            </article>
+          </div>
+        </section>
+
+        <section class="dashboard-grid">
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Trend</p>
+                <h2>近 14 天趋势</h2>
+              </div>
+            </div>
+            <div class="trend-list" id="trendList"></div>
           </article>
-          <article>
-            <span>今日发放总额</span>
-            <strong id="todayAmountText">-</strong>
+
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Rewards</p>
+                <h2>本月奖励分布</h2>
+              </div>
+            </div>
+            <div class="breakdown-list" id="rewardBreakdownList"></div>
           </article>
-          <article>
-            <span>本月签到人数</span>
-            <strong id="monthUsersText">-</strong>
-          </article>
-          <article>
-            <span>本月发放总额</span>
-            <strong id="monthAmountText">-</strong>
-          </article>
-        </div>
-        <div class="streak-panel">
-          <div>
-            <p class="eyebrow">Streaks</p>
-            <h2>连续签到榜</h2>
+        </section>
+
+        <section class="panel streak-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Streaks</p>
+              <h2>连续签到榜</h2>
+            </div>
+            <span class="panel-note">最后签到在今天或昨天的用户</span>
           </div>
           <div class="streak-list" id="streakList"></div>
-        </div>
+        </section>
       </section>
 
-      <section class="panel config-panel" id="configPanel" hidden>
+      <section class="panel config-panel tab-page" id="configPanel" data-panel="rewards" hidden>
         <div class="panel-head">
           <div>
             <p class="eyebrow">Reward Mode</p>
@@ -1871,14 +2002,42 @@ function renderAdmin() {
         </form>
       </section>
 
-      <section class="panel history-panel" id="historyPanel" hidden>
+      <section class="panel history-panel tab-page" id="historyPanel" data-panel="records" hidden>
         <div class="panel-head">
           <div>
             <p class="eyebrow">Recent</p>
             <h2>最近签到</h2>
           </div>
+          <span class="panel-note" id="historyMetaText">-</span>
+        </div>
+        <div class="toolbar">
+          <input id="recordSearchInput" type="search" placeholder="搜索用户、日期、奖励名称" />
+          <button class="secondary" id="clearSearchButton" type="button">清空</button>
+          <button class="secondary" id="exportCsvButton" type="button">导出 CSV</button>
         </div>
         <div class="history" id="history"></div>
+      </section>
+
+      <section class="tab-page" id="systemPanel" data-panel="system" hidden>
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Runtime</p>
+              <h2>系统信息</h2>
+            </div>
+          </div>
+          <div class="system-grid" id="systemGrid"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Checklist</p>
+              <h2>部署检查</h2>
+            </div>
+          </div>
+          <div class="checklist" id="checklist"></div>
+        </section>
       </section>
     </main>
   </body>
