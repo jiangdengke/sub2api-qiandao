@@ -84,10 +84,12 @@ label {
 .page-head,
 .panel,
 .stat-card,
+.stats-grid article,
 .mode-card,
 .reward-section,
 .rule-row,
-.history-item {
+.history-item,
+.streak-item {
   border: 1px solid var(--line);
   background: rgba(17, 28, 45, 0.92);
   box-shadow: var(--shadow);
@@ -177,9 +179,36 @@ h2 {
 
 .meta-grid,
 .mode-switch,
-.range-grid {
+.range-grid,
+.stats-grid {
   display: grid;
   gap: 10px;
+}
+
+.stats-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.stats-grid article {
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(8, 17, 31, 0.54);
+  box-shadow: none;
+}
+
+.stats-grid span,
+.panel-note {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.stats-grid strong {
+  display: block;
+  margin-top: 9px;
+  color: var(--text);
+  font-size: clamp(1.15rem, 2.4vw, 1.7rem);
+  line-height: 1.1;
 }
 
 .meta-grid {
@@ -288,6 +317,55 @@ h2 {
   font-weight: 800;
 }
 
+.streak-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.streak-list {
+  display: grid;
+  gap: 8px;
+}
+
+.streak-item {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 11px 12px;
+  border-radius: 14px;
+  background: rgba(8, 17, 31, 0.54);
+  box-shadow: none;
+}
+
+.streak-item span {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border-radius: 999px;
+  color: #06201d;
+  font-weight: 900;
+  background: var(--brand);
+}
+
+.streak-item strong {
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.streak-item b {
+  color: var(--brand);
+}
+
+.streak-item small {
+  color: var(--muted);
+  font-weight: 800;
+}
+
 .rules {
   display: grid;
   gap: 10px;
@@ -383,8 +461,18 @@ h2 {
   .meta-grid,
   .mode-switch,
   .range-grid,
+  .stats-grid,
   .rule-row {
     grid-template-columns: 1fr;
+  }
+
+  .streak-item {
+    grid-template-columns: 34px minmax(0, 1fr);
+  }
+
+  .streak-item b,
+  .streak-item small {
+    grid-column: 2;
   }
 
   .login-row,

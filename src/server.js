@@ -137,6 +137,7 @@ async function route(req, res) {
   if (method === "GET" && routePath === "/api/admin/config") {
     requireAdmin(req);
     const rewardConfig = getRewardConfig();
+    const adminStats = getAdminStats();
 
     sendJson(res, 200, {
       ok: true,
@@ -147,6 +148,7 @@ async function route(req, res) {
       rewardRange: rewardConfig.range,
       rewardRules: rewardConfig.rewardRules,
       rewardSummary: rewardConfig.summary,
+      stats: adminStats,
       recentEntries: getRecentEntries(30).map(publicAdminEntry)
     });
     return;
@@ -871,6 +873,112 @@ function getRecentEntries(limit) {
     .all(limit);
 }
 
+function getAdminStats() {
+  const today = dateKey(new Date(), config.checkinTimezone);
+  const currentMonth = today.slice(0, 7);
+  const todayStats = getAggregateStats(today, nextDateKey(today));
+  const monthStats = getAggregateStats(`${currentMonth}-01`, nextMonthKey(currentMonth));
+  const longestStreaks = getLongestStreaks(10, today);
+
+  return {
+    today,
+    month: currentMonth,
+    unit: config.checkinUnit,
+    todayCount: todayStats.count,
+    todayAmount: todayStats.amount,
+    monthUsers: monthStats.users,
+    monthCount: monthStats.count,
+    monthAmount: monthStats.amount,
+    longestStreaks
+  };
+}
+
+function getAggregateStats(startDate, endDate) {
+  const row = db
+    .prepare(
+      `SELECT
+        COUNT(*) AS count,
+        COUNT(DISTINCT user_id) AS users,
+        COALESCE(SUM(amount), 0) AS amount
+       FROM checkins
+       WHERE date >= ? AND date < ?`
+    )
+    .get(startDate, endDate);
+
+  return {
+    count: Number(row?.count || 0),
+    users: Number(row?.users || 0),
+    amount: Number(row?.amount || 0)
+  };
+}
+
+function getLongestStreaks(limit, today = dateKey(new Date(), config.checkinTimezone)) {
+  const activeSince = previousDateKey(today);
+  const rows = db
+    .prepare(
+      `SELECT
+        user_id AS userId,
+        MAX(user_name) AS userName,
+        MAX(user_email) AS userEmail,
+        MAX(date) AS lastDate
+       FROM checkins
+       GROUP BY user_id
+       HAVING lastDate >= ?
+       ORDER BY lastDate DESC
+       `
+    )
+    .all(activeSince);
+
+  return rows
+    .map((row) => {
+      const streak = getUserCurrentStreak(row.userId, today);
+
+      return {
+        userId: row.userId,
+        userName: row.userName || "",
+        userEmail: row.userEmail || "",
+        userDisplayName: displayUserName(row) || `用户 ${row.userId}`,
+        streak,
+        lastDate: row.lastDate || ""
+      };
+    })
+    .filter((row) => row.streak > 0)
+    .sort((left, right) => right.streak - left.streak || String(right.lastDate).localeCompare(String(left.lastDate)))
+    .slice(0, limit);
+}
+
+function getUserCurrentStreak(userId, today = dateKey(new Date(), config.checkinTimezone)) {
+  const rows = db
+    .prepare(
+      `SELECT date
+       FROM checkins
+       WHERE user_id = ?
+       ORDER BY date DESC
+       LIMIT 370`
+    )
+    .all(String(userId));
+  const latestDate = rows[0]?.date || "";
+  const yesterday = previousDateKey(today);
+
+  if (latestDate !== today && latestDate !== yesterday) {
+    return 0;
+  }
+
+  let expectedDate = latestDate;
+  let streak = 0;
+
+  for (const row of rows) {
+    if (row.date !== expectedDate) {
+      break;
+    }
+
+    streak += 1;
+    expectedDate = previousDateKey(expectedDate);
+  }
+
+  return streak;
+}
+
 function setSetting(key, value) {
   db.prepare(
     `INSERT INTO settings (key, value, updated_at)
@@ -927,6 +1035,25 @@ function nextMonthKey(month) {
   return `${next.year}-${String(next.month).padStart(2, "0")}`;
 }
 
+function nextDateKey(date) {
+  return shiftDateKey(date, 1);
+}
+
+function previousDateKey(date) {
+  return shiftDateKey(date, -1);
+}
+
+function shiftDateKey(date, delta) {
+  const [year, month, day] = date.split("-").map(Number);
+  const shifted = new Date(Date.UTC(year, month - 1, day + delta));
+
+  return [
+    shifted.getUTCFullYear(),
+    String(shifted.getUTCMonth() + 1).padStart(2, "0"),
+    String(shifted.getUTCDate()).padStart(2, "0")
+  ].join("-");
+}
+
 function publicEntry(entry) {
   return {
     date: entry.date,
@@ -944,6 +1071,7 @@ function publicAdminEntry(entry) {
     userName: entry.userName || "",
     userEmail: entry.userEmail || "",
     userDisplayName: displayUserName(entry) || `用户 ${entry.userId}`,
+    streak: getUserCurrentStreak(entry.userId),
     date: entry.date,
     amount: entry.amount,
     unit: entry.unit,
@@ -1620,6 +1748,41 @@ function renderAdmin() {
         <p class="hint">管理端只使用独立密码，不会暴露 Sub2API Admin API Key。</p>
       </section>
       <p class="message global-message" id="message"></p>
+
+      <section class="panel stats-panel" id="statsPanel" hidden>
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">Analytics</p>
+            <h2>签到统计</h2>
+          </div>
+          <span class="panel-note" id="statsDateText">-</span>
+        </div>
+        <div class="stats-grid">
+          <article>
+            <span>今日签到人数</span>
+            <strong id="todayCountText">-</strong>
+          </article>
+          <article>
+            <span>今日发放总额</span>
+            <strong id="todayAmountText">-</strong>
+          </article>
+          <article>
+            <span>本月签到人数</span>
+            <strong id="monthUsersText">-</strong>
+          </article>
+          <article>
+            <span>本月发放总额</span>
+            <strong id="monthAmountText">-</strong>
+          </article>
+        </div>
+        <div class="streak-panel">
+          <div>
+            <p class="eyebrow">Streaks</p>
+            <h2>连续签到榜</h2>
+          </div>
+          <div class="streak-list" id="streakList"></div>
+        </div>
+      </section>
 
       <section class="panel config-panel" id="configPanel" hidden>
         <div class="panel-head">

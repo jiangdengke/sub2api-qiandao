@@ -5,6 +5,7 @@ const state = {
 
 const elements = {
   loginPanel: document.querySelector("#loginPanel"),
+  statsPanel: document.querySelector("#statsPanel"),
   configPanel: document.querySelector("#configPanel"),
   historyPanel: document.querySelector("#historyPanel"),
   passwordInput: document.querySelector("#passwordInput"),
@@ -25,6 +26,12 @@ const elements = {
   addRuleButton: document.querySelector("#addRuleButton"),
   reloadButton: document.querySelector("#reloadButton"),
   message: document.querySelector("#message"),
+  statsDateText: document.querySelector("#statsDateText"),
+  todayCountText: document.querySelector("#todayCountText"),
+  todayAmountText: document.querySelector("#todayAmountText"),
+  monthUsersText: document.querySelector("#monthUsersText"),
+  monthAmountText: document.querySelector("#monthAmountText"),
+  streakList: document.querySelector("#streakList"),
   history: document.querySelector("#history")
 };
 
@@ -134,8 +141,10 @@ async function adminFetch(path, options = {}) {
 
 function renderConfig(data) {
   elements.loginPanel.hidden = true;
+  elements.statsPanel.hidden = false;
   elements.configPanel.hidden = false;
   elements.historyPanel.hidden = false;
+  renderStats(data.stats);
   renderSummary(data);
   renderRules(data.rewardRules);
   renderHistory(data.recentEntries || []);
@@ -304,6 +313,40 @@ function formatAmount(value) {
   });
 }
 
+function renderStats(stats) {
+  if (!stats) {
+    return;
+  }
+
+  elements.statsDateText.textContent = `${stats.today} · ${stats.month}`;
+  elements.todayCountText.textContent = `${stats.todayCount || 0} 人`;
+  elements.todayAmountText.textContent = `${formatAmount(stats.todayAmount || 0)} ${stats.unit}`;
+  elements.monthUsersText.textContent = `${stats.monthUsers || 0} 人`;
+  elements.monthAmountText.textContent = `${formatAmount(stats.monthAmount || 0)} ${stats.unit}`;
+  renderStreaks(stats.longestStreaks || []);
+}
+
+function renderStreaks(streaks) {
+  elements.streakList.textContent = "";
+
+  if (streaks.length === 0) {
+    elements.streakList.innerHTML = `<p class="empty">还没有连续签到记录。</p>`;
+    return;
+  }
+
+  for (const [index, entry] of streaks.entries()) {
+    const item = document.createElement("article");
+    item.className = "streak-item";
+    item.innerHTML = `
+      <span>${index + 1}</span>
+      <strong>${escapeHtml(entry.userDisplayName || entry.userName || entry.userEmail || `用户 ${entry.userId}`)}</strong>
+      <b>连续 ${entry.streak} 天</b>
+      <small>${escapeHtml(entry.lastDate || "")}</small>
+    `;
+    elements.streakList.append(item);
+  }
+}
+
 function renderHistory(entries) {
   elements.history.textContent = "";
 
@@ -319,7 +362,7 @@ function renderHistory(entries) {
     item.innerHTML = `
       <div>
         <strong>${escapeHtml(userName)}</strong>
-        <span>${escapeHtml(entry.date)} · ${escapeHtml(entry.rewardLabel || "奖励")}</span>
+        <span>${escapeHtml(entry.date)} · ${escapeHtml(entry.rewardLabel || "奖励")} · 连续 ${entry.streak || 1} 天</span>
       </div>
       <b>${entry.amount} ${escapeHtml(entry.unit)}</b>
     `;
