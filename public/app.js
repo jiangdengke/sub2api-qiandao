@@ -4,7 +4,8 @@ const state = {
   checkedIn: false,
   currentDate: new Date(),
   currentMonth: toMonthKey(new Date()),
-  today: ""
+  today: "",
+  embed: readEmbedOptions()
 };
 
 const elements = {
@@ -25,6 +26,7 @@ const elements = {
   nextMonthButton: document.querySelector("#nextMonthButton")
 };
 
+applyEmbedOptions(state.embed);
 boot();
 
 async function boot() {
@@ -53,6 +55,41 @@ async function boot() {
   } catch (error) {
     showError(error);
   }
+}
+
+function readEmbedOptions() {
+  const params = new URLSearchParams(window.location.search);
+  const theme = normalizeTheme(params.get("theme"));
+  const uiMode = normalizeUiMode(params.get("ui_mode"));
+  const lang = normalizeLang(params.get("lang"));
+
+  return { theme, uiMode, lang };
+}
+
+function applyEmbedOptions(options) {
+  document.documentElement.dataset.theme = options.theme;
+  document.documentElement.dataset.uiMode = options.uiMode;
+  document.documentElement.lang = options.lang;
+}
+
+function normalizeTheme(value) {
+  const theme = String(value || "").toLowerCase();
+
+  if (theme === "light" || theme === "dark") {
+    return theme;
+  }
+
+  return window.matchMedia?.("(prefers-color-scheme: light)")?.matches ? "light" : "dark";
+}
+
+function normalizeUiMode(value) {
+  const uiMode = String(value || "").toLowerCase();
+  return uiMode.startsWith("embed") ? "embedded" : "standalone";
+}
+
+function normalizeLang(value) {
+  const lang = String(value || "").toLowerCase();
+  return lang.startsWith("en") ? "en" : "zh-CN";
 }
 
 async function refreshMe() {

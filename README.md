@@ -188,6 +188,18 @@ URL：https://你的-sub2api-域名/checkin/
 https://你的-sub2api-域名/checkin/admin/
 ```
 
+Sub2API iframe 打开时如果追加了 `theme`、`lang`、`ui_mode` 参数，用户页会自动适配：
+
+```text
+https://你的-sub2api-域名/checkin/?theme=dark&lang=zh&ui_mode=embedded
+```
+
+支持的参数：
+
+- `theme=dark|light|auto`：切换深色、浅色或跟随系统。
+- `ui_mode=embedded`：使用更适合 iframe 的紧凑布局，去掉外层背景和阴影。
+- `lang=zh|en`：当前主要用于设置页面语言标记，界面文案仍以中文为主。
+
 ### 5. 更新镜像
 
 每次 GitHub Actions 发布新镜像后，服务器执行：
